@@ -1,0 +1,8 @@
+# Go build output
+/server/studiod
+# Node
+/web/node_modules
+/web/dist
+# Saved assets are local working data; keep the directory, not its contents
+/data/assets/*
+!/data/assets/.gitkeep

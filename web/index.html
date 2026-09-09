@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Asset Studio</title>
+    <style>
+      :root { color-scheme: dark; --bg: #0d1117; --panel: #161b22; --line: #263041; --fg: #d7dee8; --accent: #4f83cc; }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
+        font: 13px/1.4 system-ui, sans-serif; }
+      #app { display: flex; flex-direction: column; height: 100%; }
+      header { display: flex; gap: 8px; align-items: center; padding: 8px 12px;
+        background: var(--panel); border-bottom: 1px solid var(--line); }
+      header .brand { font-weight: 600; margin-right: 8px; }
+      header .spacer { flex: 1; }
+      select, input, button { background: #0f141b; color: var(--fg); border: 1px solid var(--line);
+        border-radius: 6px; padding: 5px 9px; font: inherit; }
+      button { cursor: pointer; }
+      button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+      button:hover { border-color: var(--accent); }
+      #status { color: #8b98a9; min-width: 120px; }
+      #body { display: flex; flex: 1; min-height: 0; }
+      #sidebar { width: 240px; background: var(--panel); border-right: 1px solid var(--line);
+        overflow-y: auto; padding: 8px; }
+      #sidebar h3 { margin: 4px 6px 8px; font-size: 12px; text-transform: uppercase; color: #8b98a9; }
+      #assetList { list-style: none; margin: 0; padding: 0; }
+      #assetList li { padding: 7px 8px; border-radius: 6px; cursor: pointer; display: flex; justify-content: space-between; gap: 6px; }
+      #assetList li:hover { background: #1c2330; }
+      #assetList li.active { background: #22304a; }
+      #assetList .kind { color: #8b98a9; font-size: 11px; }
+      #assetList .ref { color: var(--accent); font-size: 11px; }
+      main { flex: 1; position: relative; min-width: 0; }
+      canvas { display: block; width: 100%; height: 100%; }
+      .empty { color: #8b98a9; padding: 8px; }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <header>
+        <span class="brand">Asset&nbsp;Studio</span>
+        <select id="kind" title="Asset kind">
+          <option value="character">character</option>
+          <option value="creature">creature</option>
+          <option value="item">item</option>
+          <option value="landscape">landscape</option>
+          <option value="texture">texture</option>
+        </select>
+        <button id="new">New placeholder</button>
+        <span class="spacer"></span>
+        <input id="name" placeholder="name" size="16" />
+        <input id="wowdRef" placeholder="wowd id (optional)" size="16" title="A wowd content id: creature_id, item id, zone id — links this asset into the game" />
+        <button id="save" class="primary">Save</button>
+        <span id="status"></span>
+      </header>
+      <div id="body">
+        <aside id="sidebar">
+          <h3>Assets</h3>
+          <ul id="assetList"></ul>
+        </aside>
+        <main><canvas id="canvas"></canvas></main>
+      </div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
