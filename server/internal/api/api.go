@@ -160,7 +160,9 @@ func (h *Handler) manifest(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	m := Manifest{Version: 1, Generated: time.Now().UTC()}
+	// Assets starts as an empty slice, not nil: with nothing bound the game must receive "assets": [],
+	// because a client that does manifest.assets.find(...) would crash on null (REQ-000-8).
+	m := Manifest{Version: 1, Generated: time.Now().UTC(), Assets: []ManifestEntry{}}
 	for _, a := range assets {
 		if a.WowdRef == "" {
 			continue // only bound assets belong in the bridge

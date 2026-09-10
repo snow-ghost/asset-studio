@@ -42,6 +42,19 @@ func KnownKind(k Kind) bool {
 	}
 }
 
+// KnownFormat reports whether f is a payload format the studio stores and serves: glb or gltf for models,
+// png for textures. The check matters beyond tidiness: the format is part of the payload's file name
+// (<id>.<format>), so an unchecked value could carry a path and write outside the data directory, or be
+// "json" and overwrite the metadata file. Found by features/assets/saving.feature (REQ-000-6).
+func KnownFormat(f string) bool {
+	switch f {
+	case "glb", "gltf", "png":
+		return true
+	default:
+		return false
+	}
+}
+
 // Asset is the metadata for one stored asset. The payload (model or texture bytes) lives beside it.
 type Asset struct {
 	ID   string `json:"id"`
@@ -141,6 +154,9 @@ func (s *Store) Save(a Asset, payload []byte) (Asset, error) {
 	}
 	if a.Format == "" {
 		return Asset{}, fmt.Errorf("store: %w: format is required", ErrInvalid)
+	}
+	if !KnownFormat(a.Format) {
+		return Asset{}, fmt.Errorf("store: %w: unknown format %q", ErrInvalid, a.Format)
 	}
 	now := time.Now().UTC()
 	if a.ID == "" {
