@@ -1,4 +1,4 @@
-.PHONY: server web build run check test bdd tidy
+.PHONY: server web build run check test bdd lint lint-go lint-web tidy
 
 # Development: two processes. `make server` in one terminal, `make web` in another.
 server: ## Run the Go backend on :8099, assets in ./data/assets
@@ -25,3 +25,14 @@ bdd: ## Acceptance scenarios (godog): make bdd [F=features/assets] [T='@req-000-
 		$(if $(F),STUDIO_BDD_PATHS=../../../$(F),) \
 		$(if $(T),STUDIO_BDD_TAGS='$(T)',) \
 		go test ./test/bdd/ -count=1
+
+lint: lint-go lint-web ## All linters
+
+lint-go: ## gofmt, go vet, golangci-lint (depguard enforces the layer boundaries, forbidigo the determinism)
+	cd server && gofmt -l . | (! grep .) && go vet ./...
+	@command -v golangci-lint >/dev/null 2>&1 \
+		&& (cd server && golangci-lint run) \
+		|| echo "golangci-lint is not installed — skipped (gofmt and go vet ran)"
+
+lint-web: ## Typecheck the frontend
+	cd web && npm run typecheck

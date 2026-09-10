@@ -16,8 +16,10 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/snow-ghost/asset-studio/server/internal/api"
-	"github.com/snow-ghost/asset-studio/server/internal/store"
+	"github.com/snow-ghost/asset-studio/server/internal/adapters/fsrepo"
+	"github.com/snow-ghost/asset-studio/server/internal/adapters/httpapi"
+	"github.com/snow-ghost/asset-studio/server/internal/adapters/system"
+	"github.com/snow-ghost/asset-studio/server/internal/app"
 )
 
 func main() {
@@ -27,13 +29,16 @@ func main() {
 	cors := flag.String("cors", envOr("STUDIO_CORS", "*"), "Access-Control-Allow-Origin for the dev frontend; empty disables CORS")
 	flag.Parse()
 
-	s, err := store.New(*dataDir)
+	// The composition root: choose the adapters, hand them to the use cases, mount the HTTP surface. This
+	// is the only place that knows all three (AGENTS.md, section 4).
+	repo, err := fsrepo.New(*dataDir)
 	if err != nil {
 		log.Fatalf("studiod: %v", err)
 	}
+	studio := app.New(repo, system.Clock{}, system.IDs{})
 
 	mux := http.NewServeMux()
-	api.New(s, *cors).Register(mux)
+	httpapi.New(studio, *cors).Register(mux)
 
 	if *webDir != "" {
 		serveFrontend(mux, *webDir)
@@ -41,7 +46,7 @@ func main() {
 	} else {
 		mux.HandleFunc("GET /", func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-			w.Write([]byte("asset-studio API is up. Run the frontend with `npm run dev` in ../web, " +
+			_, _ = w.Write([]byte("asset-studio API is up. Run the frontend with `npm run dev` in ../web, " +
 				"or build it and pass -web ../web/dist.\n"))
 		})
 	}

@@ -1,0 +1,123 @@
+# Linter configuration. The section that matters most is depguard: it turns the layering rules of AGENTS.md
+# (section 4, invariant 3) into something a machine checks, because a rule that is only written down erodes.
+# forbidigo does the same for invariant 4: no wall clock and no randomness inside domain and app.
+
+version: "2"
+
+run:
+  timeout: 3m
+
+linters:
+  default: standard
+  enable:
+    - depguard
+    - forbidigo
+    - errorlint
+    - errname
+    - copyloopvar
+    - gocritic
+    - misspell
+    - nilerr
+    - noctx
+    - bodyclose
+    - prealloc
+    - revive
+    - unconvert
+    - wastedassign
+
+  settings:
+    depguard:
+      rules:
+        # The domain is the most valuable and longest-lived code in the studio. It depends on nothing, so
+        # that replacing the storage, the transport or the frontend can never require touching a rule.
+        domain:
+          files:
+            - "**/internal/domain/**"
+          allow:
+            - $gostd
+            - github.com/snow-ghost/asset-studio/server/internal/domain
+          deny:
+            - pkg: github.com/snow-ghost/asset-studio/server/internal/app
+              desc: "dependencies point inwards: app depends on domain, never the reverse (invariant 3)"
+            - pkg: github.com/snow-ghost/asset-studio/server/internal/adapters
+              desc: "the domain must not know about infrastructure (invariant 3)"
+            - pkg: net/http
+              desc: "HTTP is an adapter's concern"
+            - pkg: os
+              desc: "the domain does no I/O; the repository port does"
+        # The application layer orchestrates. It may use the domain and its own ports, never a concrete
+        # adapter: the adapter is chosen by the wiring in cmd/.
+        app:
+          files:
+            - "**/internal/app/**"
+          deny:
+            - pkg: github.com/snow-ghost/asset-studio/server/internal/adapters
+              desc: "use a port; the adapter is chosen by the wiring in cmd/ (invariant 3)"
+            - pkg: net/http
+              desc: "HTTP is an adapter's concern"
+            - pkg: os
+              desc: "the file system is behind the Repository port"
+            - pkg: crypto/rand
+              desc: "ids come through the IDs port (invariant 4)"
+            - pkg: math/rand
+              desc: "randomness comes through a port (invariant 4)"
+
+    forbidigo:
+      # Invariant 4: domain and app never read the clock or roll dice themselves; both come through ports so
+      # every rule is reproducible. Only these two layers are checked (see exclusions).
+      forbid:
+        - pattern: 'time\.Now'
+          msg: "use the Clock port; domain and app must be deterministic (invariant 4)"
+        - pattern: 'rand\.'
+          msg: "use the IDs port; domain and app must be deterministic (invariant 4)"
+      analyze-types: true
+
+    revive:
+      rules:
+        # A package without a doc comment is a package whose purpose nobody wrote down; this codebase leans
+        # on those comments to explain design decisions.
+        - name: package-comments
+          disabled: false
+        # `exported` is off on purpose: it demands a comment on every exported symbol, including trivial
+        # ones like Now() and New(), which produces comments that restate the signature. Comments here are
+        # for explaining decisions, and a rule that rewards noise makes the meaningful ones harder to find.
+        - name: exported
+          disabled: true
+        - name: error-strings
+          disabled: false
+
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - performance
+        - style
+      disabled-checks:
+        # domain.Asset is passed and ranged over by value on purpose: it is a snapshot, and a pointer would
+        # let one layer mutate what another is holding. The copy is a few hundred bytes on paths that touch
+        # the disk or the network, where it does not register.
+        - hugeParam
+        - rangeValCopy
+
+  exclusions:
+    rules:
+      # forbidigo guards domain and app only; adapters and the composition root are where the clock and the
+      # randomness legitimately live, and tests may do what they like.
+      - path: "internal/adapters/|cmd/|test/|_test\\.go"
+        linters:
+          - forbidigo
+      # Test files may reach across layers: a test's job is to wire the real thing together.
+      - path: _test\.go
+        linters:
+          - depguard
+          - prealloc
+          - errcheck
+      # The acceptance suite is an adapter of a sort: it wires app-layer code to Gherkin.
+      - path: test/bdd/
+        linters:
+          - depguard
+          - revive
+
+formatters:
+  enable:
+    - gofmt
+    - goimports

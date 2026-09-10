@@ -2,6 +2,7 @@ package bdd
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -15,20 +16,35 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/cucumber/godog"
 
-	"github.com/snow-ghost/asset-studio/server/internal/api"
-	"github.com/snow-ghost/asset-studio/server/internal/store"
+	"github.com/snow-ghost/asset-studio/server/internal/adapters/fsrepo"
+	"github.com/snow-ghost/asset-studio/server/internal/adapters/httpapi"
+	"github.com/snow-ghost/asset-studio/server/internal/adapters/system"
+	"github.com/snow-ghost/asset-studio/server/internal/app"
+	"github.com/snow-ghost/asset-studio/server/internal/domain"
 )
+
+// tickingClock hands out a time that moves one second forward on every call. The suite does not sleep
+// (AGENTS.md, section 7): "newest first" and "updated later than created" are asserted against a clock the
+// scenario owns, so they cannot flake on a fast machine and cannot pass by accident on a slow one.
+type tickingClock struct{ now time.Time }
+
+func (c *tickingClock) Now() time.Time {
+	c.now = c.now.Add(time.Second)
+	return c.now
+}
 
 // state is one scenario's world: a studio in its own sandbox directory, what the designer has saved so far
 // under the names a scenario uses, and the last answer the studio gave.
 //
 // Scenarios talk to the studio the way the frontend does — through the HTTP handler, in process, with no
-// socket. That is the widest public surface M0 has. When the store and the handler are split into
-// domain/app/adapters (AGENTS.md, section 10, item 3) the steps that are not about HTTP will bind to the
-// app layer and the scenarios will not change; that is what makes them a safety net for the move.
+// socket — on top of the real disk repository in a sandbox directory, because the files on disk
+// (<id>.json beside <id>.<format>, nothing outside the data directory) are part of what M0 promises. Time
+// comes from a clock the suite owns; ids from the production source, since no scenario predicts one. The
+// use cases themselves have table tests against memrepo in internal/app.
 type state struct {
 	// root is the sandbox; the data directory is root/data, so a write that escapes the data directory
 	// lands inside root where a step can see it, instead of somewhere in the real /tmp.
@@ -36,10 +52,10 @@ type state struct {
 	dir  string
 	mux  *http.ServeMux
 
-	named    map[string]store.Asset // by the name a scenario uses
-	payloads map[string][]byte      // current payload by asset id
-	previous map[string][]byte      // payload before the last re-save, by asset id
-	revs     map[string]int         // payload revisions per name, so each payload is distinct
+	named    map[string]domain.Asset // by the name a scenario uses
+	payloads map[string][]byte       // current payload by asset id
+	previous map[string][]byte       // payload before the last re-save, by asset id
+	revs     map[string]int          // payload revisions per name, so each payload is distinct
 
 	// The last answer.
 	status int
@@ -47,17 +63,17 @@ type state struct {
 	body   []byte
 
 	// Decoded views of answers, filled by the step that asked.
-	asset    store.Asset
-	before   store.Asset // the asset as it was before the last re-save
-	current  store.Asset // the asset the last payload request was about
-	list     []store.Asset
-	manifest api.Manifest
-	entry    api.ManifestEntry
+	asset    domain.Asset
+	before   domain.Asset // the asset as it was before the last re-save
+	current  domain.Asset // the asset the last payload request was about
+	list     []domain.Asset
+	manifest domain.Manifest
+	entry    domain.ManifestEntry
 }
 
 func newState() *state {
 	return &state{
-		named:    map[string]store.Asset{},
+		named:    map[string]domain.Asset{},
 		payloads: map[string][]byte{},
 		previous: map[string][]byte{},
 		revs:     map[string]int{},
@@ -71,12 +87,13 @@ func (s *state) start(cors string) error {
 	}
 	s.root = root
 	s.dir = filepath.Join(root, "data")
-	st, err := store.New(s.dir)
+	repo, err := fsrepo.New(s.dir)
 	if err != nil {
 		return err
 	}
+	clock := &tickingClock{now: time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)}
 	s.mux = http.NewServeMux()
-	api.New(st, cors).Register(s.mux)
+	httpapi.New(app.New(repo, clock, system.IDs{}), cors).Register(s.mux)
 	return nil
 }
 
@@ -86,7 +103,7 @@ func (s *state) cleanup() {
 	}
 }
 
-// saveBody mirrors the JSON the frontend sends (api.saveRequest).
+// saveBody mirrors the JSON the frontend sends (httpapi.saveRequest).
 type saveBody struct {
 	ID      string   `json:"id,omitempty"`
 	Name    string   `json:"name"`
@@ -110,7 +127,7 @@ func (s *state) do(method, path string, body any, hdr map[string]string) error {
 		}
 		rd = bytes.NewReader(raw)
 	}
-	req := httptest.NewRequest(method, path, rd)
+	req := httptest.NewRequestWithContext(context.Background(), method, path, rd)
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
@@ -135,10 +152,10 @@ func payloadFor(name string, rev int) []byte {
 
 func (s *state) assetPath(id string) string { return "/api/assets/" + url.PathEscape(id) }
 
-func (s *state) mustNamed(name string) (store.Asset, error) {
+func (s *state) mustNamed(name string) (domain.Asset, error) {
 	a, ok := s.named[name]
 	if !ok {
-		return store.Asset{}, fmt.Errorf("no asset named %q was saved in this scenario", name)
+		return domain.Asset{}, fmt.Errorf("no asset named %q was saved in this scenario", name)
 	}
 	return a, nil
 }
@@ -216,7 +233,7 @@ func (s *state) fetchList() error {
 	return json.Unmarshal(s.body, &s.list)
 }
 
-func (s *state) fetchPayload(a store.Asset) error {
+func (s *state) fetchPayload(a domain.Asset) error {
 	s.current = a
 	return s.do(http.MethodGet, s.assetPath(a.ID)+"/payload", nil, nil)
 }
@@ -341,7 +358,7 @@ func registerStudioSteps(sc *godog.ScenarioContext, s *state) {
 		if s.status != http.StatusOK {
 			return fmt.Errorf("manifest: %d %s", s.status, s.body)
 		}
-		s.manifest = api.Manifest{}
+		s.manifest = domain.Manifest{}
 		return json.Unmarshal(s.body, &s.manifest)
 	})
 	sc.Step(`^the frontend asks permission to call the API from "([^"]*)"$`, func(origin string) error {
