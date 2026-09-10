@@ -61,6 +61,14 @@ Feature: Saving an asset
     Then the save is refused because "unknown format"
     And nothing was written outside the studio's data directory
 
+  # A metadata-only save is an update; for an asset that does not exist yet it would create metadata that
+  # points at no file — an asset the viewport cannot open and the game cannot load.
+  @req-000-6
+  Scenario: A new asset without a payload is refused
+    When the designer saves a creature named "moss_boar" without any payload
+    Then the save is refused because "payload is required"
+    And the studio still has no assets
+
   @req-000-6
   Scenario: An id chosen by the client must be a safe file name
     When the designer saves a creature named "moss_boar" as glb under the id "../escape"

@@ -95,6 +95,16 @@ func TestSaveUpdatesInPlace(t *testing.T) {
 	}
 }
 
+func TestSaveRefusesANewAssetWithoutAPayload(t *testing.T) {
+	s, _ := newStudio()
+	if _, err := s.Save(creature("moss_boar"), nil); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("got %v, want ErrInvalid", err)
+	}
+	if list, _ := s.List(); len(list) != 0 {
+		t.Fatalf("a refused save left %d assets behind", len(list))
+	}
+}
+
 func TestSaveUnderAChosenID(t *testing.T) {
 	s, _ := newStudio()
 	a := creature("moss_boar")

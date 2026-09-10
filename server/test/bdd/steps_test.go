@@ -296,6 +296,10 @@ func registerStudioSteps(sc *godog.ScenarioContext, s *state) {
 		func(verb, kind, name, format, ref string) error {
 			return s.save(kind, name, format, ref, "", verb == "has saved")
 		})
+	sc.Step(`^the designer saves an? (\S+) named "([^"]*)" without any payload$`, func(kind, name string) error {
+		body := saveBody{Name: name, Kind: kind, Format: "glb"}
+		return s.do(http.MethodPost, "/api/assets", body, nil)
+	})
 	sc.Step(`^the designer saves an? (\S+) named "([^"]*)" as (\S+) under the id "([^"]*)"$`,
 		func(kind, name, format, id string) error {
 			return s.save(kind, name, format, "", id, false)

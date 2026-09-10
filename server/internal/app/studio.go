@@ -67,6 +67,10 @@ func (s *Studio) Save(a domain.Asset, payload []byte) (domain.Asset, error) {
 	}
 
 	switch {
+	case existing == nil && payload == nil:
+		// Metadata without a file would be an asset the viewport cannot open and the game cannot load;
+		// refusing it here is what keeps <id>.json from ever pointing at nothing.
+		return domain.Asset{}, fmt.Errorf("%w: payload is required for a new asset", domain.ErrInvalid)
 	case existing == nil:
 		a.CreatedAt = now
 	case payload == nil && existing.Format != a.Format:
