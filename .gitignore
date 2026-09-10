@@ -6,3 +6,5 @@
 # Saved assets are local working data; keep the directory, not its contents
 /data/assets/*
 !/data/assets/.gitkeep
+# Claude Code: personal overrides stay local
+/.claude/settings.local.json

@@ -1,0 +1,39 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(make check)",
+      "Bash(make check *)",
+      "Bash(make build)",
+      "Bash(make build *)",
+      "Bash(make test)",
+      "Bash(make test *)",
+      "Bash(make bdd)",
+      "Bash(make bdd *)",
+      "Bash(make lint)",
+      "Bash(make lint *)",
+      "Bash(make trace)",
+      "Bash(make trace *)",
+      "Bash(make test-web)",
+      "Bash(make test-web *)",
+      "Bash(go build ./...)",
+      "Bash(go build ./... *)",
+      "Bash(go vet ./...)",
+      "Bash(go vet ./... *)",
+      "Bash(go test ./...)",
+      "Bash(go test ./... *)",
+      "Bash(gofmt -l *)",
+      "Bash(npm run typecheck)",
+      "Bash(npm run typecheck *)",
+      "Bash(npm run test)",
+      "Bash(npm run test *)",
+      "Bash(curl -s localhost:*)",
+      "Bash(curl -s --max-time 5 localhost:*)",
+      "Bash(curl -fsS localhost:*)",
+      "Bash(curl -fsS http://localhost:*)"
+    ],
+    "ask": [
+      "Edit(//opt/projects/wowd/**)",
+      "Write(//opt/projects/wowd/**)"
+    ]
+  }
+}
