@@ -1,4 +1,4 @@
-.PHONY: server web build run check test bdd lint lint-go lint-web tidy
+.PHONY: server web build run check test bdd lint lint-go lint-web trace tidy
 
 # Development: two processes. `make server` in one terminal, `make web` in another.
 server: ## Run the Go backend on :8099, assets in ./data/assets
@@ -36,3 +36,6 @@ lint-go: ## gofmt, go vet, golangci-lint (depguard enforces the layer boundaries
 
 lint-web: ## Typecheck the frontend
 	cd web && npm run typecheck
+
+trace: ## Regenerate docs/traceability.md from specs/, features/ and web/tests/; fails on a hole
+	cd tools/trace-gen && go run . -root ../..
