@@ -251,6 +251,10 @@ TypeScript:
 | Браузер | Playwright, тег `@e2e` | импорт и экспорт glTF, вьюпорт, round-trip через живой `studiod` | `web/tests/e2e` |
 | Контракт формата | `go test` + Vitest на одних фикстурах | `testdata/*.glb`, `*.png`, `manifest.json` читаются обеими сторонами одинаково | `testdata/` |
 
+Пока слоёв нет (раздел 10, пункт 3), шаги бьют в HTTP-хендлер через `httptest` во временном каталоге —
+это самая широкая публичная поверхность M0. После переезда шаги, не касающиеся HTTP, переключаются на
+`app` с `memrepo`; сценарии при этом не меняются.
+
 Владелец Gherkin один — `godog` (как в wowd, `wowd/docs/adr/0011`): второй парсер сценариев в TS не заводится.
 Сценарии, которым нужен браузер, помечаются `@e2e` и исполняются Playwright-спеками с теми же
 названиями и тегом `@req-*` в заголовке; связь строит `make trace`. `@wip` — заготовка будущей вехи,
@@ -283,12 +287,11 @@ TypeScript:
 M0 сделан до контракта и работает, но не соответствует ему. Первая задача M1 — не редактор, а каркас
 цикла, без которого цикл нельзя выполнить. Порядок:
 
-1. `specs/000-scaffold/spec.md` — ретроспективная спека M0 с критериями `REQ-000-x` по `README.md` и
-   `docs/architecture.md` (создать ассет каждого вида, сохранить, открыть, удалить, манифест только с
-   `wowdRef`, `/payload` отдаёт байт-в-байт с верным Content-Type, неизвестный `kind` отклоняется).
-2. `features/` + `server/test/bdd` (godog, `Strict: true`, случайный порядок) + `make bdd`. Сценарии
-   спеки 000 должны позеленеть на существующем поведении — это единственный случай, когда «зелёный
-   сразу» ожидаем: поведение уже есть.
+1. ✅ 2026-09-10 — `specs/000-scaffold/spec.md`: ретроспективная спека M0, 13 критериев `REQ-000-x`.
+2. ✅ 2026-09-10 — `features/` + `server/test/bdd` (godog 0.16, `Strict`, случайный порядок) + `make bdd`,
+   `make test`. Ожидалось «зелёное сразу»; четыре сценария оказались красными и нашли два дефекта
+   (формат как путь за каталог данных; `assets: null` в пустом манифесте) — исправлены, см. «Находки»
+   в спеке. Сценарии `@e2e` (REQ-000-11…13) ждут пункт 6.
 3. Разнести `internal/store` и `internal/api` по слоям раздела 4: `Asset`, `Kind`, `validID`,
    валидация `Save`, сборка `Manifest` → `domain`; use case'ы и порты → `app`; диск → `fsrepo`;
    HTTP → `httpapi`. `time.Now()` и `crypto/rand` → порты `Clock`, `IDs`. Запись → атомарная.
@@ -328,13 +331,13 @@ make web        # Vite на :5190
 make build      # фронтенд → web/dist
 make run        # всё одним процессом на :8099
 make check      # go build + go vet + tsc --noEmit
+make test       # go test ./... — юниты и приёмка
+make bdd        # godog: make bdd [F=features/assets] [T='@req-000-3']
 ```
 
 Появятся по разделу 10 (не вызывать, пока их нет в Makefile):
 
 ```sh
-make test       # go test ./... (домен, app)
-make bdd        # godog: make bdd [F=features/assets] [T='@req-000-3']
 make lint       # gofmt, go vet, golangci-lint с depguard, typecheck
 make test-web   # vitest
 make e2e        # playwright (нужен живой studiod)

@@ -1,4 +1,4 @@
-.PHONY: server web build run check tidy
+.PHONY: server web build run check test bdd tidy
 
 # Development: two processes. `make server` in one terminal, `make web` in another.
 server: ## Run the Go backend on :8099, assets in ./data/assets
@@ -16,3 +16,12 @@ run: build ## Build the frontend and serve everything from the backend on :8099
 check: ## Compile the backend and typecheck the frontend
 	cd server && go build ./... && go vet ./...
 	cd web && npm run typecheck
+
+test: ## Backend tests, acceptance suite included
+	cd server && go test ./... -count=1
+
+bdd: ## Acceptance scenarios (godog): make bdd [F=features/assets] [T='@req-000-3']
+	cd server && \
+		$(if $(F),STUDIO_BDD_PATHS=../../../$(F),) \
+		$(if $(T),STUDIO_BDD_TAGS='$(T)',) \
+		go test ./test/bdd/ -count=1

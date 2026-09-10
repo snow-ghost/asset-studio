@@ -19,12 +19,20 @@
 | Метод | Путь | Что |
 |---|---|---|
 | GET | `/api/assets` | список метаданных, новые сверху |
-| POST | `/api/assets` | создать/сохранить (JSON: name, kind, format, tags, wowdRef, data=base64) |
+| POST | `/api/assets` | создать/сохранить (JSON: name, kind, format ∈ {glb, gltf, png}, tags, wowdRef, data=base64) |
 | GET | `/api/assets/{id}` | метаданные |
 | PUT | `/api/assets/{id}` | обновить |
 | DELETE | `/api/assets/{id}` | удалить |
 | GET | `/api/assets/{id}/payload` | сырые байты модели/текстуры |
 | GET | `/api/manifest` | мост в wowd (см. integration-with-wowd.md) |
+
+### Приёмка
+
+Поведение каркаса зафиксировано спекой `specs/000-scaffold/spec.md` и сценариями `features/**`
+(Gherkin, английский, язык дизайнера). Их исполняет godog из `server/test/bdd`: каждый сценарий получает
+свою студию во временном каталоге и говорит с ней через HTTP-хендлер in-process, без сокета — 35
+сценариев проходят за десятки миллисекунд. `make bdd` (с фильтрами `F=`, `T=`) или `make test`. Сценарии
+`@e2e` нужны браузеру и ждут Playwright (`AGENTS.md`, раздел 10).
 
 ## Фронтенд — `web` (three.js + TS + Vite)
 
