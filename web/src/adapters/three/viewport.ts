@@ -1,10 +1,12 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import type { SceneObject, ViewportPort } from '../../app/ports';
+import { asObject3D } from './scene-object';
 
 // The 3D viewport: a lit scene with a ground grid and an orbit camera, holding one asset object at a time.
 // Kept deliberately close to wowd's client renderer (same three.js, same up axis, same metre scale) so what
 // you see here is what the game will show once the asset is wired in.
-export class Viewport {
+export class Viewport implements ViewportPort {
   readonly scene = new THREE.Scene();
   private readonly camera: THREE.PerspectiveCamera;
   private readonly renderer: THREE.WebGLRenderer;
@@ -42,15 +44,15 @@ export class Viewport {
   }
 
   /** show replaces whatever is in the viewport with obj and frames the camera on it. */
-  show(obj: THREE.Object3D | null): void {
+  show(obj: SceneObject | null): void {
     if (this.current) {
       this.scene.remove(this.current);
       disposeTree(this.current);
     }
-    this.current = obj;
-    if (obj) {
-      this.scene.add(obj);
-      this.frameOn(obj);
+    this.current = obj ? asObject3D(obj) : null;
+    if (this.current) {
+      this.scene.add(this.current);
+      this.frameOn(this.current);
     }
   }
 
@@ -90,8 +92,8 @@ export function disposeTree(root: THREE.Object3D): void {
   root.traverse((o) => {
     const mesh = o as THREE.Mesh;
     if (mesh.geometry) mesh.geometry.dispose();
-    const mat = (mesh as THREE.Mesh).material;
+    const mat = mesh.material;
     if (Array.isArray(mat)) mat.forEach((m) => m.dispose());
-    else if (mat) (mat as THREE.Material).dispose();
+    else if (mat) mat.dispose();
   });
 }

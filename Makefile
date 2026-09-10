@@ -1,4 +1,4 @@
-.PHONY: server web build run check test bdd lint lint-go lint-web trace tidy
+.PHONY: server web build run check test bdd test-web e2e lint lint-go lint-web trace tidy
 
 # Development: two processes. `make server` in one terminal, `make web` in another.
 server: ## Run the Go backend on :8099, assets in ./data/assets
@@ -25,6 +25,12 @@ bdd: ## Acceptance scenarios (godog): make bdd [F=features/assets] [T='@req-000-
 		$(if $(F),STUDIO_BDD_PATHS=../../../$(F),) \
 		$(if $(T),STUDIO_BDD_TAGS='$(T)',) \
 		go test ./test/bdd/ -count=1
+
+test-web: ## Frontend unit tests (Vitest, Node, no browser)
+	cd web && npm run test
+
+e2e: ## Browser scenarios (Playwright): builds web/dist, starts studiod on :8199 with an empty data dir, runs @e2e
+	cd web && npx playwright test --project=chromium
 
 lint: lint-go lint-web ## All linters
 

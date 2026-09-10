@@ -1,0 +1,4 @@
+# Playwright: the data directory the e2e studiod writes into, and its reports
+/.e2e-data
+/test-results
+/playwright-report

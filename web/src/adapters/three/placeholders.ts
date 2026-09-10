@@ -1,11 +1,18 @@
 import * as THREE from 'three';
-import type { Kind } from './api';
+import type { Kind } from '../../domain/asset';
+import type { Placeholders } from '../../app/ports';
 
 // Placeholder geometry per asset kind. These are the starting point a designer replaces — a capsule for a
 // body, a box for an item, a noisy patch for terrain — sized in metres to match wowd's world so scale reads
 // true from the first save. They are also exactly what wowd renders today (capsules), so wiring the manifest
 // in changes nothing visually until real geometry replaces them: a safe first integration.
 const STONE = 0x8a94a6;
+
+/** threePlaceholders is the Placeholders port, backed by the functions below. */
+export const threePlaceholders: Placeholders = {
+  make: makePlaceholder,
+  textureCanvas: makeTextureCanvas,
+};
 
 export function makePlaceholder(kind: Kind): THREE.Object3D {
   switch (kind) {
@@ -60,17 +67,14 @@ function landscape(): THREE.Mesh {
 
 function texturePreview(): THREE.Mesh {
   const tex = new THREE.CanvasTexture(makeTextureCanvas());
-  const mesh = new THREE.Mesh(
-    new THREE.PlaneGeometry(2, 2),
-    new THREE.MeshBasicMaterial({ map: tex }),
-  );
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.MeshBasicMaterial({ map: tex }));
   mesh.position.y = 1;
   mesh.name = 'placeholder_texture';
   return mesh;
 }
 
 // makeTextureCanvas draws a procedural placeholder texture. A texture asset is saved as the PNG this canvas
-// produces (see main.ts), not as a model.
+// produces (see adapters/three/texture.ts), not as a model.
 export function makeTextureCanvas(size = 256): HTMLCanvasElement {
   const canvas = document.createElement('canvas');
   canvas.width = size;
