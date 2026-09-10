@@ -29,7 +29,10 @@
       "Bash(curl -s localhost:*)",
       "Bash(curl -s --max-time 5 localhost:*)",
       "Bash(curl -fsS localhost:*)",
-      "Bash(curl -fsS http://localhost:*)"
+      "Bash(curl -fsS http://localhost:*)",
+      "Bash(make lint-*)",
+      "Bash(make e2e)",
+      "Bash(make e2e *)"
     ],
     "ask": [
       "Edit(//opt/projects/wowd/**)",

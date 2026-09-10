@@ -49,13 +49,17 @@ cd ../server && go run ./cmd/studiod -web ../web/dist   # всё на порту
 
 ```sh
 make check   # сборка, go vet, типы фронтенда
+make lint    # gofmt, go vet, golangci-lint (границы слоёв), типы фронтенда
 make bdd     # приёмочные сценарии features/** (godog); make bdd F=features/assets T='@req-000-3'
 make test    # все тесты бэкенда, приёмка включена
+make test-web # юниты фронтенда (Vitest)
+make e2e     # браузерные сценарии @e2e (Playwright; сам собирает dist и поднимает studiod на :8199)
+make trace   # docs/traceability.md из спек, сценариев и тестов; падает на непокрытом критерии
 ```
 
 ## Статус
 
 M0 (каркас) — создание, сохранение, просмотр ассета каждого типа через placeholder; хранение и манифест на
-бэкенде. Поведение M0 зафиксировано спекой [specs/000-scaffold](specs/000-scaffold/spec.md) и
-сценариями в `features/`. Дальше — редактирование, импорт glTF, рельеф и вегетация, и загрузчик манифеста
+бэкенде. Поведение M0 зафиксировано спекой [specs/000-scaffold](specs/000-scaffold/spec.md) (закрыта) и
+сценариями в `features/`; отчёт вехи — [docs/M0-REPORT.md](docs/M0-REPORT.md). Дальше — редактирование, импорт glTF, рельеф и вегетация, и загрузчик манифеста
 в клиенте wowd (см. roadmap). Правила работы — в [AGENTS.md](AGENTS.md).

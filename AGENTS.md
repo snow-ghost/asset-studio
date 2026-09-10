@@ -115,7 +115,7 @@ Clean architecture, соразмерная инструменту: слой — 
 
 | Слой | Пакеты | Можно | Нельзя |
 |---|---|---|---|
-| domain | `internal/domain` | stdlib | всё остальное: `net/http`, `os`, `time.Now`, `rand`, логгеры, JSON-теги под конкретный транспорт |
+| domain | `internal/domain` | stdlib | всё остальное: `net/http`, `os`, `time.Now`, `rand`, логгеры, типы транспорта (protobuf и т.п.). JSON-теги допустимы: `<id>.json` и манифест сами являются форматом обмена (ADR-0001) |
 | app | `internal/app` | `domain`, свои порты (`Repository`, `Clock`, `IDs`) | конкретные адаптеры, файловая система, HTTP |
 | adapters | `internal/adapters/httpapi`, `internal/adapters/fsrepo`, `internal/adapters/memrepo` | `app`, `domain`, stdlib и библиотеки | бизнес-правила (их место — `domain`), знание о других адаптерах |
 | composition root | `cmd/studiod` | всё | логика, кроме сборки: флаги → адаптеры → app → HTTP |
@@ -251,9 +251,9 @@ TypeScript:
 | Браузер | Playwright, тег `@e2e` | импорт и экспорт glTF, вьюпорт, round-trip через живой `studiod` | `web/tests/e2e` |
 | Контракт формата | `go test` + Vitest на одних фикстурах | `testdata/*.glb`, `*.png`, `manifest.json` читаются обеими сторонами одинаково | `testdata/` |
 
-Пока слоёв нет (раздел 10, пункт 3), шаги бьют в HTTP-хендлер через `httptest` во временном каталоге —
-это самая широкая публичная поверхность M0. После переезда шаги, не касающиеся HTTP, переключаются на
-`app` с `memrepo`; сценарии при этом не меняются.
+Шаги приёмки бьют в HTTP-хендлер через `httptest` поверх настоящего `fsrepo` в песочнице: файлы на диске
+(`<id>.json` рядом с `<id>.<format>`, ничего вне каталога данных) — часть обещания студии. Время — из
+тикающего фейкового `Clock`, id — из продуктового источника. Юниты use case'ов — против `memrepo`.
 
 Владелец Gherkin один — `godog` (как в wowd, `wowd/docs/adr/0011`): второй парсер сценариев в TS не заводится.
 Сценарии, которым нужен браузер, помечаются `@e2e` и исполняются Playwright-спеками с теми же
@@ -282,30 +282,30 @@ TypeScript:
 - Проза (документы, спеки, ADR, этот файл) — **русский**.
 - Идентификаторы, имена файлов, Gherkin, коммиты, комментарии в коде — **английский**.
 
-## 10. Долг M0 перед этим контрактом
+## 10. Долг M0 перед этим контрактом (выплачен 2026-09-10)
 
-M0 сделан до контракта и работает, но не соответствует ему. Первая задача M1 — не редактор, а каркас
-цикла, без которого цикл нельзя выполнить. Порядок:
+M0 был сделан до контракта и ему не соответствовал. Долг выплачен до начала M1 — каркас цикла нужен
+раньше редактора. Список оставлен как история и как образец того, в каком порядке такой долг гасится;
+что нашлось по дороге — в `docs/M0-REPORT.md`.
 
 1. ✅ 2026-09-10 — `specs/000-scaffold/spec.md`: ретроспективная спека M0, 13 критериев `REQ-000-x`.
 2. ✅ 2026-09-10 — `features/` + `server/test/bdd` (godog 0.16, `Strict`, случайный порядок) + `make bdd`,
    `make test`. Ожидалось «зелёное сразу»; четыре сценария оказались красными и нашли два дефекта
    (формат как путь за каталог данных; `assets: null` в пустом манифесте) — исправлены, см. «Находки»
    в спеке. Сценарии `@e2e` (REQ-000-11…13) ждут пункт 6.
-3. Разнести `internal/store` и `internal/api` по слоям раздела 4: `Asset`, `Kind`, `validID`,
-   валидация `Save`, сборка `Manifest` → `domain`; use case'ы и порты → `app`; диск → `fsrepo`;
-   HTTP → `httpapi`. `time.Now()` и `crypto/rand` → порты `Clock`, `IDs`. Запись → атомарная.
-   Сценарии спеки 000 при этом не меняются — это и есть проверка, что переезд ничего не сломал.
-4. `server/.golangci.yml` с `depguard` по таблице раздела 4; `make lint`.
-5. `tools/trace-gen` (портировать из `wowd/tools/trace-gen`, научить читать `web/tests/**` по тегу
-   `@req-*` в заголовке); `make trace`; `docs/traceability.md`.
-6. `web/`: разнести `api.ts`, `viewport.ts`, `placeholders.ts`, `main.ts` по `domain`/`app`/`adapters`;
-   Vitest для `domain`/`app`; Playwright для `@e2e`; `make test-web`, `make e2e`.
-7. ADR-0001 «слои и один владелец Gherkin», ADR-0002 «файловое хранилище и формат обмена glTF/PNG»
-   (ретроспективно — решения приняты в M0, зафиксировать их причины и альтернативы).
+3. ✅ 2026-09-10 — `domain` / `app` / `adapters/{fsrepo,memrepo,system,httpapi}`, порты `Clock` и `IDs`,
+   атомарная запись. Сценарии спеки 000 не менялись и остались зелёными (ADR-0001).
+4. ✅ 2026-09-10 — `server/.golangci.yml`: `depguard` по таблице раздела 4, `forbidigo` на `time.Now` и
+   `rand` в `domain`/`app`; `make lint` чист.
+5. ✅ 2026-09-10 — `tools/trace-gen` (свой stdlib-модуль, читает `specs/`, `features/`, `web/tests/**`);
+   `make trace`; `docs/traceability.md`.
+6. ✅ 2026-09-10 — `web/src/{domain,app,adapters}`, `StudioSession` на портах; Vitest (`make test-web`);
+   Playwright для `@e2e` поверх собранного `dist` и `studiod` на `:8199` (`make e2e`).
+7. ✅ 2026-09-10 — ADR-0001 «слои и один владелец Gherkin», ADR-0002 «файловое хранилище и формат обмена
+   glTF/PNG» в `docs/adr/`.
 
-Пока пункт не сделан, соответствующая команда в разделе 12 отсутствует, и это нормально; нельзя только
-делать вид, что она есть.
+Правило, которое отсюда остаётся: команда появляется в разделе 12 только вместе с целью в `Makefile`;
+делать вид, что она есть, нельзя.
 
 ## 11. Определение готовности (Definition of Done)
 
@@ -333,13 +333,8 @@ make run        # всё одним процессом на :8099
 make check      # go build + go vet + tsc --noEmit
 make test       # go test ./... — юниты и приёмка
 make bdd        # godog: make bdd [F=features/assets] [T='@req-000-3']
-```
-
-Появятся по разделу 10 (не вызывать, пока их нет в Makefile):
-
-```sh
-make lint       # gofmt, go vet, golangci-lint с depguard, typecheck
-make test-web   # vitest
-make e2e        # playwright (нужен живой studiod)
-make trace      # docs/traceability.md из specs/ и features/
+make test-web   # vitest: юниты domain/app фронтенда в Node
+make e2e        # playwright: сценарии @e2e; сам собирает dist и поднимает studiod на :8199
+make lint       # gofmt, go vet, golangci-lint с depguard и forbidigo, typecheck
+make trace      # docs/traceability.md из specs/, features/ и web/tests/
 ```
