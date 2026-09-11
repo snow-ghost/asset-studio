@@ -151,13 +151,14 @@ HTTP-хендлер — три строки: декодировать DTO, вы�
 
 ```
 web/src/
-  domain/         asset.ts (Asset, Kind, Format, formatFor(kind), правила валидации), manifest.ts
-  app/            session.ts (активный ассет, dirty, save/load через порты), commands.ts (M1: команды с undo), ports.ts
+  domain/         asset.ts (Asset, Kind, Format, formatFor(kind), правила валидации), manifest.ts,
+                  import.ts (правила приёма glTF), model.ts (Transform, MaterialParams, ModelStats), limits.ts
+  app/            session.ts (активный ассет, dirty, выбор, save/load/import через порты), commands.ts (History и команды с undo), ports.ts
   adapters/
     http/         api.ts — AssetGateway поверх fetch
-    three/        viewport.ts, placeholders.ts, gltf.ts (экспорт/импорт), texture.ts
-    ui/           sidebar.ts, toolbar.ts, status.ts — только DOM, вызывают app
-  main.ts         сборка
+    three/        viewport.ts, placeholders.ts, gltf.ts (экспорт/импорт), texture.ts, editor.ts (гизмо, выбор, материалы, статистика)
+    ui/           sidebar.ts, toolbar.ts, status.ts, inspector.ts — только DOM, вызывают app
+  main.ts         сборка и window.__studio для браузерных тестов
 web/tests/
   unit/           Vitest: domain и app в Node, без WebGL
   e2e/            Playwright: браузер + живой studiod

@@ -29,14 +29,17 @@
 
 ```sh
 # 1. Бэкенд (порт 8099), ассеты складываются в ./data/assets
-make server        # или: cd server && go run ./cmd/studiod
+make server        # или: cd server && go run ./cmd/studiod   (-max-payload N — лимит нагрузки в МиБ, по умолчанию 64)
 
 # 2. Фронтенд (порт 5190), обращается к бэкенду по http://localhost:8099
 make web           # или: cd web && npm install && npm run dev
 ```
 
-Открыть http://localhost:5190. Выбрать тип ассета, нажать «New placeholder», отредактировать, «Save».
-Сохранённые ассеты появляются слева; клик — просмотр.
+Открыть http://localhost:5190. Выбрать тип ассета, нажать «New placeholder» или «Import glTF» (`.glb`
+или самодостаточный `.gltf`), подвинуть модель гизмо (W/E/R) или числами в панели справа, кликнуть меш и
+поправить цвет, metalness и roughness, «Save». Ctrl+Z / Ctrl+Shift+Z — отмена и возврат. Сохранённые
+ассеты появляются слева; клик — открыть. Несохранённые правки помечены «● modified», и студия спросит,
+прежде чем их потерять.
 
 Собранный фронтенд можно отдавать одним процессом:
 
@@ -60,6 +63,8 @@ make trace   # docs/traceability.md из спек, сценариев и тес�
 ## Статус
 
 M0 (каркас) — создание, сохранение, просмотр ассета каждого типа через placeholder; хранение и манифест на
-бэкенде. Поведение M0 зафиксировано спекой [specs/000-scaffold](specs/000-scaffold/spec.md) (закрыта) и
-сценариями в `features/`; отчёт вехи — [docs/M0-REPORT.md](docs/M0-REPORT.md). Дальше — редактирование, импорт glTF, рельеф и вегетация, и загрузчик манифеста
-в клиенте wowd (см. roadmap). Правила работы — в [AGENTS.md](AGENTS.md).
+бэкенде — спека [specs/000-scaffold](specs/000-scaffold/spec.md), отчёт [docs/M0-REPORT.md](docs/M0-REPORT.md).
+M1 (редактирование модели) — импорт glTF/GLB, гизмо и числовые поля, материалы, undo, round-trip без потерь —
+спека [specs/001-model-editing](specs/001-model-editing/spec.md), отчёт [docs/M1-REPORT.md](docs/M1-REPORT.md).
+Дальше — текстуры (M2), рельеф и вегетация (M3), предметы, персонажи и загрузчик манифеста в клиенте wowd
+(см. roadmap). Правила работы — в [AGENTS.md](AGENTS.md).
