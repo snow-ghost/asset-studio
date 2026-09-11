@@ -80,7 +80,7 @@ func newState() *state {
 	}
 }
 
-func (s *state) start(cors string) error {
+func (s *state) start(cors string, maxPayload int64) error {
 	root, err := os.MkdirTemp("", "studio-bdd-")
 	if err != nil {
 		return err
@@ -93,7 +93,7 @@ func (s *state) start(cors string) error {
 	}
 	clock := &tickingClock{now: time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)}
 	s.mux = http.NewServeMux()
-	httpapi.New(app.New(repo, clock, system.IDs{}), cors).Register(s.mux)
+	httpapi.New(app.New(repo, clock, system.IDs{}), cors, maxPayload).Register(s.mux)
 	return nil
 }
 
@@ -160,11 +160,25 @@ func (s *state) mustNamed(name string) (domain.Asset, error) {
 	return a, nil
 }
 
-// save creates an asset. precondition says whether a refusal is a broken Given (fail now) or the thing
-// the scenario is about (leave it for the Then).
+// bigPayload makes a payload of exactly n bytes with a repeating non-text pattern, for the scenarios about
+// the size limit: the content does not matter there, the length does.
+func bigPayload(n int64) []byte {
+	out := make([]byte, n)
+	for i := range out {
+		out[i] = byte(i%251) ^ 0xA5
+	}
+	return out
+}
+
+// save creates an asset with the next revision of its payload. precondition says whether a refusal is a
+// broken Given (fail now) or the thing the scenario is about (leave it for the Then).
 func (s *state) save(kind, name, format, ref, chosenID string, precondition bool) error {
+	return s.create(kind, name, format, ref, chosenID, payloadFor(name, s.revs[name]+1), precondition)
+}
+
+// create is save with an explicit payload.
+func (s *state) create(kind, name, format, ref, chosenID string, payload []byte, precondition bool) error {
 	rev := s.revs[name] + 1
-	payload := payloadFor(name, rev)
 	body := saveBody{ID: chosenID, Name: name, Kind: kind, Format: format, WowdRef: ref,
 		Data: base64.StdEncoding.EncodeToString(payload)}
 	if err := s.do(http.MethodPost, "/api/assets", body, nil); err != nil {
@@ -185,20 +199,28 @@ func (s *state) save(kind, name, format, ref, chosenID string, precondition bool
 	return nil
 }
 
-// resave updates an existing asset with PUT. mod edits the request the way the scenario says; a new
-// payload is attached when withPayload is set.
+// resave updates an existing asset with PUT. mod edits the request the way the scenario says; the next
+// revision of the payload is attached when withPayload is set.
 func (s *state) resave(name string, withPayload bool, mod func(*saveBody)) error {
+	var payload []byte
+	if withPayload {
+		payload = payloadFor(name, s.revs[name]+1)
+	}
+	return s.resaveWith(name, payload, mod)
+}
+
+// resaveWith is resave with an explicit payload; nil means a metadata-only update. A refused re-save records
+// nothing, so "the original payload" a later step asks about is still the one that is stored.
+func (s *state) resaveWith(name string, payload []byte, mod func(*saveBody)) error {
 	a, err := s.mustNamed(name)
 	if err != nil {
 		return err
 	}
 	s.before = a
 	body := saveBody{Name: a.Name, Kind: string(a.Kind), Format: a.Format, Tags: a.Tags, WowdRef: a.WowdRef}
-	var payload []byte
 	rev := s.revs[name]
-	if withPayload {
+	if payload != nil {
 		rev++
-		payload = payloadFor(name, rev)
 		body.Data = base64.StdEncoding.EncodeToString(payload)
 	}
 	mod(&body)
@@ -211,7 +233,7 @@ func (s *state) resave(name string, withPayload bool, mod func(*saveBody)) error
 	if err := json.Unmarshal(s.body, &s.asset); err != nil {
 		return fmt.Errorf("decode updated asset: %w", err)
 	}
-	if withPayload {
+	if payload != nil {
 		s.previous[a.ID] = s.payloads[a.ID]
 		s.payloads[a.ID] = payload
 		s.revs[name] = rev
@@ -283,9 +305,13 @@ func sameSet(got, want []string) bool {
 
 func registerStudioSteps(sc *godog.ScenarioContext, s *state) {
 	// --- the studio ---
-	sc.Step(`^an empty studio$`, func() error { return s.start("*") })
-	sc.Step(`^a studio started in development mode$`, func() error { return s.start("*") })
-	sc.Step(`^a studio started with CORS disabled$`, func() error { return s.start("") })
+	sc.Step(`^an empty studio$`, func() error { return s.start("*", httpapi.DefaultMaxPayload) })
+	sc.Step(`^a studio started in development mode$`, func() error { return s.start("*", httpapi.DefaultMaxPayload) })
+	sc.Step(`^a studio started with CORS disabled$`, func() error { return s.start("", httpapi.DefaultMaxPayload) })
+	sc.Step(`^a studio whose payload limit is (\d+) MiB$`, func(mib string) error {
+		n, _ := strconv.ParseInt(mib, 10, 64)
+		return s.start("*", n<<20)
+	})
 
 	// --- saving ---
 	sc.Step(`^the designer (saves|has saved) an? (\S+) named "([^"]*)" as ?(\S*)$`,
@@ -296,6 +322,15 @@ func registerStudioSteps(sc *godog.ScenarioContext, s *state) {
 		func(verb, kind, name, format, ref string) error {
 			return s.save(kind, name, format, ref, "", verb == "has saved")
 		})
+	sc.Step(`^the designer saves an? (\S+) named "([^"]*)" as (\S+) with a payload of exactly (\d+) MiB$`,
+		func(kind, name, format, mib string) error {
+			n, _ := strconv.ParseInt(mib, 10, 64)
+			return s.create(kind, name, format, "", "", bigPayload(n<<20), false)
+		})
+	sc.Step(`^the designer saves "([^"]*)" again with a payload of (\d+) MiB plus one byte$`, func(name, mib string) error {
+		n, _ := strconv.ParseInt(mib, 10, 64)
+		return s.resaveWith(name, bigPayload(n<<20+1), func(*saveBody) {})
+	})
 	sc.Step(`^the designer saves an? (\S+) named "([^"]*)" without any payload$`, func(kind, name string) error {
 		body := saveBody{Name: name, Kind: kind, Format: "glb"}
 		return s.do(http.MethodPost, "/api/assets", body, nil)
@@ -489,6 +524,21 @@ func registerStudioSteps(sc *godog.ScenarioContext, s *state) {
 	})
 
 	// --- what the studio answered: refusals and absences ---
+	sc.Step(`^the save is refused as too large, naming the limit "([^"]*)"$`, func(limit string) error {
+		if s.status != http.StatusRequestEntityTooLarge {
+			return fmt.Errorf("expected a 413 refusal, got %d %.200s", s.status, s.body)
+		}
+		var e struct {
+			Error string `json:"error"`
+		}
+		if err := json.Unmarshal(s.body, &e); err != nil {
+			return fmt.Errorf("refusal body is not {\"error\": …}: %.200s", s.body)
+		}
+		if !strings.Contains(e.Error, limit) {
+			return fmt.Errorf("refused with %q, expected the limit %q to be named", e.Error, limit)
+		}
+		return nil
+	})
 	sc.Step(`^the save is refused because "([^"]*)"$`, func(reason string) error {
 		if s.status != http.StatusBadRequest {
 			return fmt.Errorf("expected a 400 refusal, got %d %s", s.status, s.body)

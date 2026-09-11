@@ -7,15 +7,19 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"strconv"
 
 	"github.com/snow-ghost/asset-studio/server/internal/app"
 	"github.com/snow-ghost/asset-studio/server/internal/domain"
 )
 
-// maxBody bounds a save request. Models are large but not that large; anything bigger is a mistake or an
-// attack, and reading it into memory first would be the wrong way to find out.
-const maxBody = 64 << 20
+// DefaultMaxPayload is the largest model or texture the studio accepts, in bytes. Models are large but
+// not that large; anything bigger is a mistake or an attack, and reading it into memory first would be the
+// wrong way to find out. The frontend checks the same number before uploading; testdata/limits.json is the
+// one place both read it from in their tests, so the two cannot drift apart.
+const DefaultMaxPayload int64 = 64 << 20
 
 // Handler serves the studio API.
 type Handler struct {
@@ -23,12 +27,20 @@ type Handler struct {
 	// allowOrigin is echoed as Access-Control-Allow-Origin so the Vite dev server (a different port) can
 	// call the API. In production the frontend is served from the same origin and this is empty.
 	allowOrigin string
+	// maxPayload bounds the decoded payload of one save (REQ-001-8). It is a transport limit — about how
+	// much one request may carry, not about what an asset is — which is why it lives here and not in domain.
+	maxPayload int64
 }
 
-// New builds the handler. allowOrigin "*" is fine for local development; "" disables CORS.
-func New(studio *app.Studio, allowOrigin string) *Handler {
-	return &Handler{studio: studio, allowOrigin: allowOrigin}
+// New builds the handler. allowOrigin "*" is fine for local development; "" disables CORS. maxPayload is
+// the payload limit in bytes; DefaultMaxPayload unless a deployment has a reason to differ.
+func New(studio *app.Studio, allowOrigin string, maxPayload int64) *Handler {
+	return &Handler{studio: studio, allowOrigin: allowOrigin, maxPayload: maxPayload}
 }
+
+// maxBody is the request body limit that lets a payload of maxPayload bytes through: base64 inflates it by
+// four thirds, and the rest of the JSON envelope (name, tags, a long wowdRef) needs some room of its own.
+func (h *Handler) maxBody() int64 { return h.maxPayload*4/3 + 1<<20 }
 
 // Register mounts the API routes on a mux.
 func (h *Handler) Register(mux *http.ServeMux) {
@@ -89,7 +101,14 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) { h.save(w, r, 
 func (h *Handler) save(w http.ResponseWriter, r *http.Request, pathID string) {
 	h.cors(w)
 	var req saveRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBody)).Decode(&req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, h.maxBody())).Decode(&req); err != nil {
+		// A body the reader cut off is "too large", not "invalid JSON": the designer needs to hear the
+		// limit, not a parse error from wherever the truncation happened to land.
+		var tooBig *http.MaxBytesError
+		if errors.As(err, &tooBig) {
+			h.tooLarge(w, -1)
+			return
+		}
 		writeJSON(w, http.StatusBadRequest, errorBody{"invalid JSON body"})
 		return
 	}
@@ -101,6 +120,10 @@ func (h *Handler) save(w http.ResponseWriter, r *http.Request, pathID string) {
 		raw, err := base64.StdEncoding.DecodeString(req.Data)
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, errorBody{"data is not valid base64"})
+			return
+		}
+		if int64(len(raw)) > h.maxPayload {
+			h.tooLarge(w, int64(len(raw)))
 			return
 		}
 		payload = raw
@@ -153,6 +176,25 @@ func (h *Handler) manifest(w http.ResponseWriter, _ *http.Request) {
 func (h *Handler) healthz(w http.ResponseWriter, _ *http.Request) {
 	h.cors(w)
 	_, _ = w.Write([]byte("ok"))
+}
+
+// tooLarge answers 413 naming the limit. n is the payload size when it is known, or -1 when the body was cut
+// off before the payload could be decoded.
+func (h *Handler) tooLarge(w http.ResponseWriter, n int64) {
+	msg := "payload exceeds the limit of " + formatMiB(h.maxPayload)
+	if n >= 0 {
+		msg = fmt.Sprintf("payload of %d bytes exceeds the limit of %s", n, formatMiB(h.maxPayload))
+	}
+	writeJSON(w, http.StatusRequestEntityTooLarge, errorBody{msg})
+}
+
+// formatMiB prints a byte count the way a designer reads it: "64 MiB", or "0.5 MiB" when it is not whole.
+func formatMiB(n int64) string {
+	const mib = 1 << 20
+	if n%mib == 0 {
+		return fmt.Sprintf("%d MiB", n/mib)
+	}
+	return strconv.FormatFloat(float64(n)/mib, 'f', -1, 64) + " MiB"
 }
 
 func (h *Handler) cors(w http.ResponseWriter) {

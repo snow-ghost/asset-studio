@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 
 	"github.com/snow-ghost/asset-studio/server/internal/adapters/fsrepo"
 	"github.com/snow-ghost/asset-studio/server/internal/adapters/httpapi"
@@ -27,7 +28,12 @@ func main() {
 	dataDir := flag.String("data", envOr("STUDIO_DATA", "../data/assets"), "directory holding the assets")
 	webDir := flag.String("web", envOr("STUDIO_WEB", ""), "directory of the built frontend to serve; empty serves API only")
 	cors := flag.String("cors", envOr("STUDIO_CORS", "*"), "Access-Control-Allow-Origin for the dev frontend; empty disables CORS")
+	maxPayloadMiB := flag.Int("max-payload", envIntOr("STUDIO_MAX_PAYLOAD_MIB", int(httpapi.DefaultMaxPayload>>20)),
+		"largest model or texture accepted, in MiB")
 	flag.Parse()
+	if *maxPayloadMiB <= 0 {
+		log.Fatalf("studiod: -max-payload must be a positive number of MiB, got %d", *maxPayloadMiB)
+	}
 
 	// The composition root: choose the adapters, hand them to the use cases, mount the HTTP surface. This
 	// is the only place that knows all three (AGENTS.md, section 4).
@@ -38,7 +44,7 @@ func main() {
 	studio := app.New(repo, system.Clock{}, system.IDs{})
 
 	mux := http.NewServeMux()
-	httpapi.New(studio, *cors).Register(mux)
+	httpapi.New(studio, *cors, int64(*maxPayloadMiB)<<20).Register(mux)
 
 	if *webDir != "" {
 		serveFrontend(mux, *webDir)
@@ -73,6 +79,15 @@ func serveFrontend(mux *http.ServeMux, dir string) {
 
 func envOr(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
+}
+
+// envIntOr reads an integer from the environment; an unset or unparsable value falls back, so a typo in a
+// deployment env cannot silently turn the limit into zero.
+func envIntOr(key string, fallback int) int {
+	if v, err := strconv.Atoi(os.Getenv(key)); err == nil {
 		return v
 	}
 	return fallback
