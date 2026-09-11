@@ -4,6 +4,7 @@
 package memrepo
 
 import (
+	"encoding/json"
 	"fmt"
 	"sync"
 
@@ -58,6 +59,10 @@ func (r *Repo) Payload(id string) ([]byte, error) {
 func (r *Repo) Put(a domain.Asset, payload []byte) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	// The asset's only reference-typed fields are copied so a caller mutating its own value afterwards
+	// cannot reach into the store — the disk repository has that property for free, this one must earn it.
+	a.Tags = append([]string(nil), a.Tags...)
+	a.Procedural = append(json.RawMessage(nil), a.Procedural...)
 	r.assets[a.ID] = a
 	if payload != nil {
 		r.payloads[a.ID] = append([]byte(nil), payload...)

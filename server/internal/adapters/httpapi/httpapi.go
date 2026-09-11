@@ -4,6 +4,7 @@
 package httpapi
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -69,6 +70,9 @@ type saveRequest struct {
 	Format  string   `json:"format"`
 	Tags    []string `json:"tags"`
 	WowdRef string   `json:"wowdRef"`
+	// Procedural is the recipe of a procedural texture, passed through untouched: its schema is the
+	// frontend's (domain.Asset.Procedural). JSON null means "none", the same as leaving it out.
+	Procedural json.RawMessage `json:"procedural"`
 	// Data is the base64-encoded payload. Empty means a metadata-only update of an existing asset.
 	Data string `json:"data"`
 }
@@ -115,6 +119,9 @@ func (h *Handler) save(w http.ResponseWriter, r *http.Request, pathID string) {
 	if pathID != "" {
 		req.ID = pathID
 	}
+	if bytes.Equal(bytes.TrimSpace(req.Procedural), []byte("null")) {
+		req.Procedural = nil
+	}
 	var payload []byte
 	if req.Data != "" {
 		raw, err := base64.StdEncoding.DecodeString(req.Data)
@@ -129,12 +136,13 @@ func (h *Handler) save(w http.ResponseWriter, r *http.Request, pathID string) {
 		payload = raw
 	}
 	saved, err := h.studio.Save(domain.Asset{
-		ID:      req.ID,
-		Name:    req.Name,
-		Kind:    domain.Kind(req.Kind),
-		Format:  req.Format,
-		Tags:    req.Tags,
-		WowdRef: req.WowdRef,
+		ID:         req.ID,
+		Name:       req.Name,
+		Kind:       domain.Kind(req.Kind),
+		Format:     req.Format,
+		Tags:       req.Tags,
+		WowdRef:    req.WowdRef,
+		Procedural: req.Procedural,
 	}, payload)
 	if err != nil {
 		writeErr(w, err)

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -55,6 +56,13 @@ func (s *Studio) Save(a domain.Asset, payload []byte) (domain.Asset, error) {
 	if err := a.Validate(); err != nil {
 		return domain.Asset{}, err
 	}
+	if payload != nil {
+		if err := domain.ValidatePayload(a.Format, payload); err != nil {
+			return domain.Asset{}, err
+		}
+	}
+	// The recipe arrived in the caller's buffer; what is stored must not change if the caller reuses it.
+	a.Procedural = append(json.RawMessage(nil), a.Procedural...)
 	now := s.clock.Now()
 
 	var existing *domain.Asset

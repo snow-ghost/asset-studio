@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -13,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
@@ -105,14 +107,19 @@ func (s *state) cleanup() {
 
 // saveBody mirrors the JSON the frontend sends (httpapi.saveRequest).
 type saveBody struct {
-	ID      string   `json:"id,omitempty"`
-	Name    string   `json:"name"`
-	Kind    string   `json:"kind"`
-	Format  string   `json:"format"`
-	Tags    []string `json:"tags,omitempty"`
-	WowdRef string   `json:"wowdRef,omitempty"`
-	Data    string   `json:"data,omitempty"`
+	ID         string          `json:"id,omitempty"`
+	Name       string          `json:"name"`
+	Kind       string          `json:"kind"`
+	Format     string          `json:"format"`
+	Tags       []string        `json:"tags,omitempty"`
+	WowdRef    string          `json:"wowdRef,omitempty"`
+	Procedural json.RawMessage `json:"procedural,omitempty"`
+	Data       string          `json:"data,omitempty"`
 }
+
+// proceduralParams is the recipe the procedural scenarios save and read back. The server treats it as an
+// opaque object, so its content only has to be a plausible one.
+const proceduralParams = `{"type":"noise","size":256,"colorA":"#334455","colorB":"#aabbcc","scale":2,"seed":7}`
 
 // do sends one request to the studio and keeps the answer.
 func (s *state) do(method, path string, body any, hdr map[string]string) error {
@@ -142,12 +149,51 @@ func (s *state) do(method, path string, body any, hdr map[string]string) error {
 	return nil
 }
 
-// payloadFor makes a payload that is distinct per asset and per revision and contains bytes outside
-// ASCII, so that a byte-for-byte comparison means something: plain text surviving base64 and the disk
-// would prove nothing about a real glb.
-func payloadFor(name string, rev int) []byte {
-	b := []byte(fmt.Sprintf("payload of %q rev %d ", name, rev))
-	return append(b, 0x00, 0xFF, 0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x7F)
+var pngSignature = []byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A}
+
+// payloadFor makes a payload that its format accepts (the studio sniffs a payload before storing it,
+// REQ-002-6) and that is distinct per asset and per revision, so a byte-for-byte comparison means
+// something. A glb is a real GLB container whose JSON chunk carries the name and revision in extras; a
+// gltf is that JSON as text; a png is the signature followed by the same tag and a few bytes outside
+// ASCII, because plain text surviving base64 and the disk would prove nothing about a real file. Any other
+// format is refused before the payload is looked at, so it gets the glb shape.
+func payloadFor(name string, rev int, format string) []byte {
+	tag := fmt.Sprintf(`{"asset":{"version":"2.0"},"extras":{"name":%q,"rev":%d}}`, name, rev)
+	switch format {
+	case "gltf":
+		return []byte(tag)
+	case "png":
+		b := append([]byte(nil), pngSignature...)
+		b = append(b, fmt.Sprintf("%s#%d", name, rev)...)
+		return append(b, 0x00, 0xFF, 0x7F)
+	default:
+		return glbContainer([]byte(tag))
+	}
+}
+
+// glbContainer wraps JSON in a GLB with a single JSON chunk, padded with spaces to four bytes as the
+// container spec asks.
+func glbContainer(jsonBytes []byte) []byte {
+	padded := append([]byte(nil), jsonBytes...)
+	for len(padded)%4 != 0 {
+		padded = append(padded, ' ')
+	}
+	out := make([]byte, 20, 20+len(padded))
+	binary.LittleEndian.PutUint32(out[0:], 0x46546C67) // "glTF"
+	binary.LittleEndian.PutUint32(out[4:], 2)
+	binary.LittleEndian.PutUint32(out[8:], uint32(20+len(padded)))
+	binary.LittleEndian.PutUint32(out[12:], uint32(len(padded)))
+	binary.LittleEndian.PutUint32(out[16:], 0x4E4F534A) // "JSON"
+	return append(out, padded...)
+}
+
+// otherFormat is a format whose bytes are not what `format` expects — the payload the mismatch scenarios
+// send.
+func otherFormat(format string) string {
+	if format == "png" {
+		return "glb"
+	}
+	return "png"
 }
 
 func (s *state) assetPath(id string) string { return "/api/assets/" + url.PathEscape(id) }
@@ -160,27 +206,34 @@ func (s *state) mustNamed(name string) (domain.Asset, error) {
 	return a, nil
 }
 
-// bigPayload makes a payload of exactly n bytes with a repeating non-text pattern, for the scenarios about
-// the size limit: the content does not matter there, the length does.
-func bigPayload(n int64) []byte {
+// bigPayload makes a payload of exactly n bytes for the scenarios about the size limit: it opens with
+// what its format's sniff wants to see (the limit is checked after the sniff would pass, not instead of
+// it) and continues with a repeating non-text pattern — the length is what matters there.
+func bigPayload(n int64, format string) []byte {
 	out := make([]byte, n)
 	for i := range out {
 		out[i] = byte(i%251) ^ 0xA5
 	}
+	copy(out, payloadFor("big", 0, format))
 	return out
 }
 
 // save creates an asset with the next revision of its payload. precondition says whether a refusal is a
 // broken Given (fail now) or the thing the scenario is about (leave it for the Then).
 func (s *state) save(kind, name, format, ref, chosenID string, precondition bool) error {
-	return s.create(kind, name, format, ref, chosenID, payloadFor(name, s.revs[name]+1), precondition)
+	return s.create(kind, name, format, ref, chosenID, payloadFor(name, s.revs[name]+1, format), precondition)
 }
 
 // create is save with an explicit payload.
 func (s *state) create(kind, name, format, ref, chosenID string, payload []byte, precondition bool) error {
+	return s.createWith(saveBody{ID: chosenID, Name: name, Kind: kind, Format: format, WowdRef: ref}, payload, precondition)
+}
+
+// createWith posts a save with the given fields and payload and records the asset when it is accepted.
+func (s *state) createWith(body saveBody, payload []byte, precondition bool) error {
+	name := body.Name
 	rev := s.revs[name] + 1
-	body := saveBody{ID: chosenID, Name: name, Kind: kind, Format: format, WowdRef: ref,
-		Data: base64.StdEncoding.EncodeToString(payload)}
+	body.Data = base64.StdEncoding.EncodeToString(payload)
 	if err := s.do(http.MethodPost, "/api/assets", body, nil); err != nil {
 		return err
 	}
@@ -200,30 +253,34 @@ func (s *state) create(kind, name, format, ref, chosenID string, payload []byte,
 }
 
 // resave updates an existing asset with PUT. mod edits the request the way the scenario says; the next
-// revision of the payload is attached when withPayload is set.
+// revision of the payload — in whatever format the edited request asks for — is attached when withPayload
+// is set.
 func (s *state) resave(name string, withPayload bool, mod func(*saveBody)) error {
-	var payload []byte
-	if withPayload {
-		payload = payloadFor(name, s.revs[name]+1)
-	}
-	return s.resaveWith(name, payload, mod)
+	return s.resaveWith(name, func(b *saveBody) []byte {
+		mod(b)
+		if !withPayload {
+			return nil
+		}
+		return payloadFor(name, s.revs[name]+1, b.Format)
+	})
 }
 
-// resaveWith is resave with an explicit payload; nil means a metadata-only update. A refused re-save records
+// resaveWith puts an edited save. edit changes the request and returns the payload to attach, or nil for a
+// metadata-only update; it sees the final format, so the payload can match it. A refused re-save records
 // nothing, so "the original payload" a later step asks about is still the one that is stored.
-func (s *state) resaveWith(name string, payload []byte, mod func(*saveBody)) error {
+func (s *state) resaveWith(name string, edit func(*saveBody) []byte) error {
 	a, err := s.mustNamed(name)
 	if err != nil {
 		return err
 	}
 	s.before = a
-	body := saveBody{Name: a.Name, Kind: string(a.Kind), Format: a.Format, Tags: a.Tags, WowdRef: a.WowdRef}
+	body := saveBody{Name: a.Name, Kind: string(a.Kind), Format: a.Format, Tags: a.Tags, WowdRef: a.WowdRef, Procedural: a.Procedural}
 	rev := s.revs[name]
+	payload := edit(&body)
 	if payload != nil {
 		rev++
 		body.Data = base64.StdEncoding.EncodeToString(payload)
 	}
-	mod(&body)
 	if err := s.do(http.MethodPut, s.assetPath(a.ID), body, nil); err != nil {
 		return err
 	}
@@ -325,12 +382,35 @@ func registerStudioSteps(sc *godog.ScenarioContext, s *state) {
 	sc.Step(`^the designer saves an? (\S+) named "([^"]*)" as (\S+) with a payload of exactly (\d+) MiB$`,
 		func(kind, name, format, mib string) error {
 			n, _ := strconv.ParseInt(mib, 10, 64)
-			return s.create(kind, name, format, "", "", bigPayload(n<<20), false)
+			return s.create(kind, name, format, "", "", bigPayload(n<<20, format), false)
 		})
 	sc.Step(`^the designer saves "([^"]*)" again with a payload of (\d+) MiB plus one byte$`, func(name, mib string) error {
 		n, _ := strconv.ParseInt(mib, 10, 64)
-		return s.resaveWith(name, bigPayload(n<<20+1), func(*saveBody) {})
+		return s.resaveWith(name, func(b *saveBody) []byte { return bigPayload(n<<20+1, b.Format) })
 	})
+	sc.Step(`^the designer saves an? (\S+) named "([^"]*)" as (\S+) with a payload that is not \S+$`,
+		func(kind, name, format string) error {
+			return s.create(kind, name, format, "", "", payloadFor(name, 1, otherFormat(format)), false)
+		})
+	// The texture is bound to a wowd id of its own name so that the manifest has an entry to inspect.
+	sc.Step(`^the designer saves a texture named "([^"]*)" as png with procedural parameters$`, func(name string) error {
+		body := saveBody{Name: name, Kind: "texture", Format: "png", WowdRef: name, Procedural: json.RawMessage(proceduralParams)}
+		return s.createWith(body, payloadFor(name, 1, "png"), false)
+	})
+	sc.Step(`^the designer saves an? (\S+) named "([^"]*)" as (\S+) with (some|non-object|oversized) procedural parameters$`,
+		func(kind, name, format, what string) error {
+			var params json.RawMessage
+			switch what {
+			case "some":
+				params = json.RawMessage(proceduralParams)
+			case "non-object":
+				params = json.RawMessage(`[1,2,3]`)
+			case "oversized":
+				params = json.RawMessage(`{"pad":"` + strings.Repeat("x", domain.MaxProceduralBytes) + `"}`)
+			}
+			body := saveBody{Name: name, Kind: kind, Format: format, Procedural: params}
+			return s.createWith(body, payloadFor(name, 1, format), false)
+		})
 	sc.Step(`^the designer saves an? (\S+) named "([^"]*)" without any payload$`, func(kind, name string) error {
 		body := saveBody{Name: name, Kind: kind, Format: "glb"}
 		return s.do(http.MethodPost, "/api/assets", body, nil)
@@ -371,6 +451,58 @@ func registerStudioSteps(sc *godog.ScenarioContext, s *state) {
 	})
 	sc.Step(`^the designer opens the asset "([^"]*)"$`, func(id string) error {
 		return s.do(http.MethodGet, s.assetPath(id), nil, nil)
+	})
+	sc.Step(`^opening "([^"]*)" returns the same procedural parameters$`, func(name string) error {
+		a, err := s.mustNamed(name)
+		if err != nil {
+			return err
+		}
+		if err := s.do(http.MethodGet, s.assetPath(a.ID), nil, nil); err != nil {
+			return err
+		}
+		if s.status != http.StatusOK {
+			return fmt.Errorf("opening %q answered %d %s", name, s.status, s.body)
+		}
+		if err := json.Unmarshal(s.body, &s.asset); err != nil {
+			return err
+		}
+		// Compared as JSON values, not bytes: the server may re-encode the object, and the designer's
+		// generator reads values, not whitespace.
+		var got, want any
+		if err := json.Unmarshal(s.asset.Procedural, &got); err != nil {
+			return fmt.Errorf("stored procedural parameters are not JSON: %s", s.asset.Procedural)
+		}
+		if err := json.Unmarshal([]byte(proceduralParams), &want); err != nil {
+			return err
+		}
+		if !reflect.DeepEqual(got, want) {
+			return fmt.Errorf("procedural parameters came back as %s, want %s", s.asset.Procedural, proceduralParams)
+		}
+		return nil
+	})
+	sc.Step(`^the manifest entry for "([^"]*)" carries no procedural parameters$`, func(name string) error {
+		if err := s.do(http.MethodGet, "/api/manifest", nil, nil); err != nil {
+			return err
+		}
+		if s.status != http.StatusOK {
+			return fmt.Errorf("manifest: %d %s", s.status, s.body)
+		}
+		var m struct {
+			Assets []map[string]any `json:"assets"`
+		}
+		if err := json.Unmarshal(s.body, &m); err != nil {
+			return err
+		}
+		for _, e := range m.Assets {
+			if e["name"] != name {
+				continue
+			}
+			if _, leaked := e["procedural"]; leaked {
+				return fmt.Errorf("manifest entry for %q carries procedural parameters: %v", name, e["procedural"])
+			}
+			return nil
+		}
+		return fmt.Errorf("no manifest entry named %q", name)
 	})
 	sc.Step(`^the designer opens the payload of "([^"]*)"$`, func(name string) error {
 		a, err := s.mustNamed(name)
