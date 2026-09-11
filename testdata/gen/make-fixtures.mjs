@@ -68,29 +68,32 @@ function mesh(faces) {
   return { positions, normals, uvs, indices };
 }
 
-// body: a 1.0 × 1.0 × 1.5 m box standing on the ground — the whole model's bounding box.
+// body: a 1.0 × 1.0 × 1.25 m box standing on the ground, from z = -0.75 to z = 0.5. The tusks stick out
+// of its front face to z = 0.75, so the whole model measures 1.0 × 1.0 × 1.5 m — the number the scenarios
+// assert — and a tusk is something a ray can hit first, which the material scenarios need when they click
+// one. A tusk hidden inside the body would be unselectable by any real click.
 function cube() {
-  const [hx, y0, y1, hz] = [0.5, 0, 1, 0.75];
-  const centre = [0, 0.5, 0];
+  const [hx, y0, y1, z0, z1] = [0.5, 0, 1, -0.75, 0.5];
+  const centre = [0, 0.5, (z0 + z1) / 2];
   const quads = [
-    [[hx, y0, -hz], [hx, y1, -hz], [hx, y1, hz], [hx, y0, hz]],
-    [[-hx, y0, -hz], [-hx, y1, -hz], [-hx, y1, hz], [-hx, y0, hz]],
-    [[-hx, y1, -hz], [hx, y1, -hz], [hx, y1, hz], [-hx, y1, hz]],
-    [[-hx, y0, -hz], [hx, y0, -hz], [hx, y0, hz], [-hx, y0, hz]],
-    [[-hx, y0, hz], [hx, y0, hz], [hx, y1, hz], [-hx, y1, hz]],
-    [[-hx, y0, -hz], [hx, y0, -hz], [hx, y1, -hz], [-hx, y1, -hz]],
+    [[hx, y0, z0], [hx, y1, z0], [hx, y1, z1], [hx, y0, z1]],
+    [[-hx, y0, z0], [-hx, y1, z0], [-hx, y1, z1], [-hx, y0, z1]],
+    [[-hx, y1, z0], [hx, y1, z0], [hx, y1, z1], [-hx, y1, z1]],
+    [[-hx, y0, z0], [hx, y0, z0], [hx, y0, z1], [-hx, y0, z1]],
+    [[-hx, y0, z1], [hx, y0, z1], [hx, y1, z1], [-hx, y1, z1]],
+    [[-hx, y0, z0], [hx, y0, z0], [hx, y1, z0], [-hx, y1, z0]],
   ];
   return mesh(quads.map((q) => face(q, centre)));
 }
 
-// tusk: a tetrahedron inside the body's bounds, so it adds meshes and a shared material without
-// changing the bounding box the scenarios assert.
+// tusk: a tetrahedron rooted inside the body (z = 0.45) and protruding through its front face to
+// z = 0.75 — the model's full depth.
 function tetra(cx) {
   const a = [cx - 0.1, 0.3, 0.45];
   const b = [cx + 0.1, 0.3, 0.45];
-  const c = [cx, 0.3, 0.74];
+  const c = [cx, 0.3, 0.75];
   const d = [cx, 0.6, 0.55];
-  const centre = [cx, 0.375, 0.5475];
+  const centre = [cx, 0.375, 0.55];
   return mesh([[a, b, c], [a, b, d], [b, c, d], [c, a, d]].map((t) => face(t, centre)));
 }
 
