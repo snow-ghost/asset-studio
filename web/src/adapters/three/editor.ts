@@ -179,9 +179,14 @@ export class ThreeEditor implements EditorPort {
     const centre = new THREE.Box3().setFromObject(mesh).getCenter(new THREE.Vector3());
     const p = this.viewport.project(centre);
     if (!p) return null;
+    // A point where the mesh is the first hit is not enough: the gizmo sits on the object's origin and
+    // takes the press before the studio sees it, so a candidate its pickers cover would click nothing.
+    const pickers = this.pickers(this.controls.mode);
     for (const [dx, dy] of spiral(60, 6)) {
       const q = { x: p.x + dx, y: p.y + dy };
-      if (this.pick(q.x, q.y) === mesh) return q;
+      if (this.pick(q.x, q.y) !== mesh) continue;
+      this.raycaster.setFromCamera(this.viewport.toNdc(q.x, q.y), this.viewport.camera);
+      if (this.raycaster.intersectObjects(pickers, false).length === 0) return q;
     }
     return null;
   }

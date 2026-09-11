@@ -248,9 +248,16 @@ export async function setRecipe(page: Page, patch: Record<string, string | numbe
   }
 }
 
-/** chooseTexture selects a base-colour texture for the current material by its label in the panel. */
+/**
+ * chooseTexture selects a base-colour texture for the current material by its label in the panel, and waits
+ * until it is on the material: assigning fetches the asset's pixels and builds a texture asynchronously,
+ * so the panel is only truthful once that landed — on a slow machine a step later would read too early.
+ */
 export async function chooseTexture(page: Page, label: string): Promise<void> {
   await page.locator('#mat-texture').selectOption({ label });
+  await expect
+    .poll(() => page.evaluate(() => window.__studio?.state().materialTexture?.present ?? null))
+    .toBe(label !== 'none');
 }
 
 /** saveTextureFile saves the fixture PNG as a named texture asset, without going through the viewport preview edits. */
