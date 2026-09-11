@@ -3,6 +3,7 @@
 // trusting the generator, so a change to make-fixtures.mjs that silently shifts a count fails here, not
 // in a browser test three layers away.
 import { existsSync, readFileSync } from 'node:fs';
+import { inflateSync } from 'node:zlib';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -173,6 +174,47 @@ try {
 }
 check(!junkIsJson, 'junk: parses as JSON');
 
+// --- bark_diffuse.png: a standalone 64×64 RGBA texture that really decodes
+const BARK = 64;
+const bark = readFileSync(join(DIR, 'bark_diffuse.png'));
+{
+  const sig = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+  check(sig.every((b, i) => bark[i] === b), 'bark: PNG signature');
+  // Walk the chunks: IHDR first, then collect IDAT, stop at IEND.
+  let pos = 8;
+  let ihdr = null;
+  const idat = [];
+  let sawEnd = false;
+  while (pos + 8 <= bark.length && !sawEnd) {
+    const len = bark.readUInt32BE(pos);
+    const type = bark.subarray(pos + 4, pos + 8).toString('ascii');
+    const data = bark.subarray(pos + 8, pos + 8 + len);
+    if (type === 'IHDR') ihdr = data;
+    else if (type === 'IDAT') idat.push(data);
+    else if (type === 'IEND') sawEnd = true;
+    pos += 12 + len;
+  }
+  check(sawEnd, 'bark: no IEND chunk');
+  check(ihdr !== null && ihdr.readUInt32BE(0) === BARK && ihdr.readUInt32BE(4) === BARK, 'bark: IHDR is not 64×64');
+  check(ihdr !== null && ihdr[8] === 8 && ihdr[9] === 6, 'bark: not 8-bit RGBA');
+  const raw = inflateSync(Buffer.concat(idat));
+  const stride = BARK * 4 + 1;
+  check(raw.length === BARK * stride, `bark: decoded ${raw.length} bytes, want ${BARK * stride}`);
+  let rowsIdentical = 0;
+  const colours = new Set();
+  for (let y = 0; y < BARK; y++) {
+    check(raw[y * stride] === 0, `bark: row ${y} uses a filter other than None`);
+    for (let x = 0; x < BARK; x++) {
+      const o = y * stride + 1 + x * 4;
+      check(raw[o + 3] === 255, `bark: pixel ${x},${y} is not opaque`);
+      colours.add((raw[o] << 16) | (raw[o + 1] << 8) | raw[o + 2]);
+    }
+    if (y > 0 && raw.subarray(y * stride, (y + 1) * stride).equals(raw.subarray((y - 1) * stride, y * stride))) rowsIdentical++;
+  }
+  check(rowsIdentical === 0, `bark: ${rowsIdentical} pairs of adjacent rows are identical`);
+  check(colours.size >= 100, `bark: only ${colours.size} distinct colours`);
+}
+
 if (failures.length) {
   console.error('fixtures: FAILED');
   for (const f of failures) console.error(' - ' + f);
@@ -181,5 +223,6 @@ if (failures.length) {
 console.log(
   `fixtures ok: meshes=${glbJson.meshes.length} vertices=${stats.vertices} indices=${stats.indices} ` +
     `bbox=[${EXPECT.min}]..[${EXPECT.max}] materials=${glbJson.materials.length} textures=${glbJson.textures.length} ` +
-    `images=${glbJson.images.length} animations=${glbJson.animations.length} glb=${glbBytes.length}B`,
+    `images=${glbJson.images.length} animations=${glbJson.animations.length} glb=${glbBytes.length}B ` +
+    `bark_diffuse=${BARK}x${BARK} png=${bark.length}B`,
 );

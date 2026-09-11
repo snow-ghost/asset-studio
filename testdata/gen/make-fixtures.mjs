@@ -118,6 +118,57 @@ function pngChunk(type, data) {
   crc.writeUInt32BE(crc32(typeAndData));
   return Buffer.concat([len, typeAndData, crc]);
 }
+// encodePng writes an 8-bit RGBA PNG with filter None on every scanline: the simplest valid PNG, and one
+// whose pixels a checker can read back with inflate alone. png2x2 below predates it and keeps its own body
+// so the bytes embedded in the committed moss_boar files stay exactly as they are.
+function encodePng(width, height, rgba) {
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = 8; // bit depth
+  ihdr[9] = 6; // RGBA
+  const raw = Buffer.alloc(height * (width * 4 + 1));
+  for (let y = 0; y < height; y++) {
+    const row = y * (width * 4 + 1);
+    raw[row] = 0; // filter None
+    rgba.copy(raw, row + 1, y * width * 4, (y + 1) * width * 4);
+  }
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    pngChunk('IHDR', ihdr),
+    pngChunk('IDAT', deflateSync(raw, { level: 9 })),
+    pngChunk('IEND', Buffer.alloc(0)),
+  ]);
+}
+
+// barkDiffuse is the standalone texture fixture for spec 002: 64 × 64, opaque, bark-like vertical streaks
+// from a seeded PRNG in browns, with per-pixel grain so no two rows are alike and a pixel-equality check
+// in the browser has something to bite on. Original content (invariant 8).
+function barkDiffuse() {
+  const size = 64;
+  const rand = mulberry32(0xba2c);
+  const rgba = Buffer.alloc(size * size * 4);
+  // One base tone per column, drifting slowly so the streaks read as bark rather than as stripes.
+  const columns = [];
+  let tone = 0.5;
+  for (let x = 0; x < size; x++) {
+    tone = Math.min(1, Math.max(0, tone + (rand() - 0.5) * 0.35));
+    columns.push(tone);
+  }
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const grain = (rand() - 0.5) * 0.25;
+      const t = Math.min(1, Math.max(0, columns[x] + grain));
+      // Between a dark umber and a lighter tan.
+      const r = Math.round(70 + t * 100);
+      const g = Math.round(42 + t * 70);
+      const b = Math.round(22 + t * 40);
+      rgba.set([r, g, b, 255], (y * size + x) * 4);
+    }
+  }
+  return encodePng(size, size, rgba);
+}
+
 function png2x2() {
   const ihdr = Buffer.alloc(13);
   ihdr.writeUInt32BE(2, 0); // width
@@ -359,6 +410,9 @@ function main() {
   for (let i = 0; i < junk.length; i++) junk[i] = Math.floor(rand() * 256);
   junk[0] = 0xff;
   writeFileSync(join(OUT, 'not-a-model.bin'), junk);
+
+  // bark_diffuse.png: the standalone texture the spec 002 scenarios import, assign and round-trip.
+  writeFileSync(join(OUT, 'bark_diffuse.png'), barkDiffuse());
 
   console.log(`hide baseColorFactor ${JSON.stringify(linearFactor(HIDE_HEX))} (${HIDE_HEX})`);
   console.log(`bone baseColorFactor ${JSON.stringify(linearFactor(BONE_HEX))} (${BONE_HEX})`);
