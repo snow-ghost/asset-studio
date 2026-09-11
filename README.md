@@ -1,5 +1,7 @@
 # Asset Studio
 
+[![ci](https://github.com/snow-ghost/asset-studio/actions/workflows/ci.yml/badge.svg)](https://github.com/snow-ghost/asset-studio/actions/workflows/ci.yml)
+
 Инструмент для создания и просмотра ассетов игры **wowd**: модели персонажей и существ, предметы, элементы
 ландшафта и текстуры. Всё, что здесь сделано, предназначено для интеграции в клиент wowd — связь описана в
 [docs/integration-with-wowd.md](docs/integration-with-wowd.md) и заложена в код с первого дня.

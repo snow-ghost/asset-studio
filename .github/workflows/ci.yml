@@ -1,0 +1,69 @@
+# The same checks as `make` runs locally, nothing more: a commit that is green here is one that passed
+# check, lint, the acceptance suite, the unit suites, the traceability matrix and the browser scenarios.
+# Two jobs so the browser suite (a Chromium download, ~40 s of tests) does not hold back the fast one.
+name: ci
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+        working-directory: web
+      # depguard and forbidigo live here: this is what makes invariants 3 and 4 machine-checked in CI.
+      - uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.13.2
+          working-directory: server
+      - run: make check
+      - run: make lint-go
+      - run: make lint-web
+      - run: make test
+      - run: make test-web
+      - name: traceability matrix is committed and has no hole
+        run: make trace && git diff --exit-code -- docs/traceability.md
+      - name: fixtures still carry the numbers the scenarios rely on
+        run: node testdata/gen/check-fixtures.mjs
+
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+        working-directory: web
+      - run: npx playwright install --with-deps chromium
+        working-directory: web
+      # Builds web/dist and starts studiod on :8199 itself (web/playwright.config.ts).
+      - run: make e2e
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-results
+          path: web/test-results
+          retention-days: 7
