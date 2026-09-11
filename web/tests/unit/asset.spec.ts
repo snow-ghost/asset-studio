@@ -1,6 +1,6 @@
-// @req-000-1 @req-000-12
+// @req-000-1 @req-000-12 @req-001-1
 import { describe, expect, it } from 'vitest';
-import { KINDS, defaultName, formatFor, isKind, validateName, type Format, type Kind } from '../../src/domain/asset';
+import { KINDS, defaultName, formatFor, isDefaultName, isKind, validateName, type Format, type Kind } from '../../src/domain/asset';
 
 describe('KINDS', () => {
   it('lists every member of the Kind union exactly once', () => {
@@ -51,5 +51,14 @@ describe('validateName', () => {
 describe('defaultName', () => {
   it('names a fresh placeholder after its kind', () => {
     expect(defaultName('landscape')).toBe('landscape_new');
+  });
+});
+
+describe('isDefaultName', () => {
+  it('recognises the names the studio makes up, for every kind, and nothing else', () => {
+    for (const kind of KINDS) expect(isDefaultName(defaultName(kind))).toBe(true);
+    for (const typed of ['moss_boar', 'creature', 'creature_new_v2', '', 'CREATURE_NEW']) {
+      expect(isDefaultName(typed)).toBe(false);
+    }
   });
 });

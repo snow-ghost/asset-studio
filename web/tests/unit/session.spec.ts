@@ -1,8 +1,72 @@
-// @req-000-11 @req-000-12
+// @req-000-11 @req-000-12 @req-001-1 @req-001-2 @req-001-3 @req-001-4 @req-001-5 @req-001-7
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
 import { StudioSession, type SessionPorts, type SessionState } from '../../src/app/session';
-import type { SceneObject, TextureSource } from '../../src/app/ports';
+import type { EditorEvents, EditorPort, GizmoMode, SceneObject, TextureSource } from '../../src/app/ports';
 import type { Asset, Kind, SaveRequest } from '../../src/domain/asset';
+import { IDENTITY, type MaterialParams, type ModelStats, type Transform } from '../../src/domain/model';
+
+const FIXTURES = new URL('../../../testdata/', import.meta.url);
+function fixture(name: string): ArrayBuffer {
+  const buf = readFileSync(new URL(name, FIXTURES));
+  return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer;
+}
+
+/**
+ * FakeEditor is a model the session can edit without three.js: a transform, two meshes sharing nothing and
+ * two sharing one material, and a record of what was asked. It reports the gestures a real adapter would
+ * through the events the session bound.
+ */
+class FakeEditor implements EditorPort {
+  transform: Transform = IDENTITY;
+  materials = new Map<string, MaterialParams>([
+    ['m-hide', { color: '#8b5a2b', metalness: 0, roughness: 0.9 }],
+    ['m-bone', { color: '#e8e2d0', metalness: 0.1, roughness: 0.6 }],
+  ]);
+  selected: Array<string | null> = [];
+  modes: GizmoMode[] = [];
+  events: EditorEvents | null = null;
+  present = true;
+
+  getTransform(): Transform {
+    return this.transform;
+  }
+  setTransform(t: Transform): void {
+    this.transform = t;
+  }
+  getMaterial(id: string): MaterialParams | null {
+    return this.materials.get(id) ?? null;
+  }
+  setMaterial(id: string, m: MaterialParams): void {
+    if (this.materials.has(id)) this.materials.set(id, m);
+  }
+  stats(): ModelStats | null {
+    if (!this.present) return null;
+    return {
+      meshes: 3,
+      vertices: 48,
+      indices: 60,
+      size: { x: 1, y: 1, z: 1.5 },
+      textures: 1,
+      animations: 1,
+      meshList: [
+        { id: 'body', name: 'body', vertices: 24, indices: 36, material: 'm-hide' },
+        { id: 'tl', name: 'tusk_left', vertices: 12, indices: 12, material: 'm-bone' },
+        { id: 'tr', name: 'tusk_right', vertices: 12, indices: 12, material: 'm-bone' },
+        { id: 'plane', name: 'unlit', vertices: 4, indices: 6, material: null },
+      ],
+    };
+  }
+  select(id: string | null): void {
+    this.selected.push(id);
+  }
+  setGizmoMode(mode: GizmoMode): void {
+    this.modes.push(mode);
+  }
+  bind(events: EditorEvents): void {
+    this.events = events;
+  }
+}
 
 // The fakes record what the session asked of the world. They are deliberately dumb: the session is the
 // thing under test, and a clever fake would be a second implementation to keep right.
@@ -57,8 +121,22 @@ function world() {
     },
   };
   const models = {
+    imported: [] as string[],
     export: (obj: SceneObject) => Promise.resolve(bytes(`glb:${obj.name}`)),
     load: (url: string) => Promise.resolve({ name: `model:${url}` }),
+    import(_bytes: ArrayBuffer, format: string) {
+      this.imported.push(format);
+      return Promise.resolve({ name: `imported:${format}` });
+    },
+  };
+  const editor = new FakeEditor();
+  const confirm = {
+    answer: true,
+    asked: [] as string[],
+    confirm(q: string) {
+      this.asked.push(q);
+      return this.answer;
+    },
   };
   const textures = {
     encode: (src: TextureSource) => Promise.resolve(bytes(`png:${src.width}`)),
@@ -88,11 +166,11 @@ function world() {
     },
     payloadUrl: (id: string) => `/api/assets/${id}/payload`,
   };
-  const ports: SessionPorts = { gateway, models, textures, placeholders, viewport, status };
+  const ports: SessionPorts = { gateway, models, textures, placeholders, viewport, editor, confirm, status };
   const session = new StudioSession(ports);
   const states: SessionState[] = [];
   session.subscribe((s) => states.push(s));
-  return { session, status, viewport, placeholders, gateway, states };
+  return { session, status, viewport, placeholders, gateway, models, editor, confirm, states };
 }
 
 describe('newPlaceholder', () => {
@@ -200,10 +278,16 @@ describe('load', () => {
     const w = world();
     const s = new StudioSession({
       gateway: w.gateway,
-      models: { export: () => Promise.reject(new Error('no')), load: () => Promise.reject(new Error('bad glb')) },
+      models: {
+        export: () => Promise.reject(new Error('no')),
+        load: () => Promise.reject(new Error('bad glb')),
+        import: () => Promise.reject(new Error('no')),
+      },
       textures: { encode: () => Promise.reject(new Error('no')), load: () => Promise.reject(new Error('no')) },
       placeholders: w.placeholders,
       viewport: w.viewport,
+      editor: w.editor,
+      confirm: w.confirm,
       status: w.status,
     });
     await s.load(asset());
@@ -252,5 +336,219 @@ describe('refreshList', () => {
     await w.session.refreshList();
     expect(w.states.at(-1)).toMatchObject({ listError: null });
     expect(w.states.at(-1)?.assets).toHaveLength(1);
+  });
+});
+
+// --- M1: the editor ---
+
+const moved: Transform = { ...IDENTITY, position: { x: 1, y: 0, z: -2 } };
+
+describe('importModel', () => {
+  it('shows the model, names the asset after the file and marks it modified', async () => {
+    const w = world();
+    w.session.setKind('creature');
+    w.session.newPlaceholder(); // the studio opens on a placeholder with a made-up name
+    await w.session.importModel({ name: 'models/moss_boar.glb', bytes: fixture('moss_boar.glb') });
+    expect(w.models.imported).toEqual(['glb']);
+    expect(w.viewport.object).toEqual({ name: 'imported:glb' });
+    expect(w.session.snapshot()).toMatchObject({ activeId: null, name: 'moss_boar', dirty: true, kind: 'creature' });
+    expect(w.status.infos.at(-1)).toBe('imported models/moss_boar.glb: 3 meshes, 48 vertices, 1.0 × 1.0 × 1.5 m');
+  });
+
+  it('keeps a name the designer typed', async () => {
+    const w = world();
+    w.session.setKind('creature');
+    w.session.setName('boar_v2');
+    await w.session.importModel({ name: 'moss_boar.gltf', bytes: fixture('moss_boar.gltf') });
+    expect(w.models.imported).toEqual(['gltf']);
+    expect(w.session.snapshot().name).toBe('boar_v2');
+  });
+
+  it.each<[string, Kind, string]>([
+    ['not-a-model.bin', 'creature', 'not a glTF'],
+    ['external.gltf', 'creature', 'external files'],
+    ['draco.gltf', 'creature', 'compression'],
+    ['moss_boar.glb', 'texture', 'PNG'],
+  ])('refuses %s as a %s and leaves the viewport alone', async (file, kind, reason) => {
+    const w = world();
+    w.session.setKind('creature');
+    w.session.newPlaceholder();
+    w.session.setKind(kind);
+    await w.session.importModel({ name: file, bytes: fixture(file) });
+    expect(w.models.imported).toEqual([]);
+    expect(w.status.errors.at(-1)).toContain(reason);
+    expect(w.viewport.object).toEqual({ name: 'placeholder_creature' });
+    expect(w.session.snapshot().dirty).toBe(false);
+  });
+
+  it('puts a parser failure on the status line', async () => {
+    const w = world();
+    w.session.setKind('creature');
+    w.models.import = () => Promise.reject(new Error('bad chunk'));
+    await w.session.importModel({ name: 'moss_boar.glb', bytes: fixture('moss_boar.glb') });
+    expect(w.status.errors.at(-1)).toBe('import failed: bad chunk');
+  });
+});
+
+describe('transform and material edits', () => {
+  it('applies a valid transform as one undoable command and marks the asset modified', () => {
+    const w = world();
+    w.session.newPlaceholder();
+    expect(w.session.setTransform(moved)).toBe(true);
+    expect(w.editor.transform).toEqual(moved);
+    expect(w.session.snapshot()).toMatchObject({ dirty: true, canUndo: true, canRedo: false, transform: moved });
+  });
+
+  it.each<Transform>([
+    { ...IDENTITY, scale: { x: 0, y: 1, z: 1 } },
+    { ...IDENTITY, scale: { x: -2, y: 1, z: 1 } },
+    { ...IDENTITY, position: { x: Number.NaN, y: 0, z: 0 } },
+    { ...IDENTITY, rotation: { x: Number.POSITIVE_INFINITY, y: 0, z: 0 } },
+  ])('refuses an unusable transform %o and changes nothing', (bad) => {
+    const w = world();
+    w.session.newPlaceholder();
+    expect(w.session.setTransform(bad)).toBe(false);
+    expect(w.editor.transform).toEqual(IDENTITY);
+    expect(w.status.errors.at(-1)).toBe('a transform needs finite numbers and a scale above zero');
+    expect(w.session.snapshot()).toMatchObject({ dirty: false, canUndo: false });
+  });
+
+  it('edits the selected mesh material through its id, so a shared material follows', () => {
+    const w = world();
+    w.session.newPlaceholder();
+    w.session.select('tl');
+    expect(w.editor.selected.at(-1)).toBe('tl');
+    expect(w.session.snapshot().material).toEqual({ color: '#e8e2d0', metalness: 0.1, roughness: 0.6 });
+    const green = { color: '#00ff00', metalness: 0.5, roughness: 0.2 };
+    expect(w.session.setMaterial(green)).toBe(true);
+    expect(w.editor.getMaterial('m-bone')).toEqual(green);
+    expect(w.editor.getMaterial('m-hide')).toEqual({ color: '#8b5a2b', metalness: 0, roughness: 0.9 });
+  });
+
+  it('refuses a material edit without a selection or on an unlit mesh', () => {
+    const w = world();
+    w.session.newPlaceholder();
+    expect(w.session.setMaterial({ color: '#ff0000', metalness: 0, roughness: 1 })).toBe(false);
+    w.session.select('plane');
+    expect(w.session.snapshot().material).toBeNull();
+    expect(w.session.setMaterial({ color: '#ff0000', metalness: 0, roughness: 1 })).toBe(false);
+    expect(w.status.errors.at(-1)).toBe('select a mesh with an editable material first');
+  });
+
+  it('refuses out-of-range material values', () => {
+    const w = world();
+    w.session.newPlaceholder();
+    w.session.select('body');
+    expect(w.session.setMaterial({ color: 'red', metalness: 0, roughness: 1 })).toBe(false);
+    expect(w.session.setMaterial({ color: '#ff0000', metalness: 1.5, roughness: 1 })).toBe(false);
+    expect(w.editor.getMaterial('m-hide')?.color).toBe('#8b5a2b');
+  });
+
+  it('clearing the selection hides the material', () => {
+    const w = world();
+    w.session.newPlaceholder();
+    w.session.select('body');
+    w.session.select(null);
+    expect(w.editor.selected).toEqual([null, 'body', null]);
+    expect(w.session.snapshot()).toMatchObject({ selectedMesh: null, material: null });
+  });
+});
+
+describe('history', () => {
+  it('undoes and redoes a move, and a new edit forgets the redo', () => {
+    const w = world();
+    w.session.newPlaceholder();
+    w.session.setTransform(moved);
+    w.session.undo();
+    expect(w.editor.transform).toEqual(IDENTITY);
+    expect(w.session.snapshot()).toMatchObject({ canUndo: false, canRedo: true });
+    w.session.redo();
+    expect(w.editor.transform).toEqual(moved);
+    w.session.undo();
+    const up = { ...IDENTITY, position: { x: 0, y: 2, z: 0 } };
+    w.session.setTransform(up);
+    expect(w.session.snapshot()).toMatchObject({ canRedo: false, transform: up });
+  });
+
+  it('keeps fifty steps and no more', () => {
+    const w = world();
+    w.session.newPlaceholder();
+    for (let i = 1; i <= 60; i++) w.session.setTransform({ ...IDENTITY, position: { x: i / 10, y: 0, z: 0 } });
+    for (let i = 0; i < 50; i++) w.session.undo();
+    expect(w.editor.transform.position.x).toBeCloseTo(1.0, 6);
+    expect(w.session.snapshot().canUndo).toBe(false);
+  });
+
+  it('records one gizmo drag as one step and ignores a drag that moved nothing', () => {
+    const w = world();
+    w.session.newPlaceholder();
+    w.editor.transform = moved; // the adapter already moved the object during the drag
+    w.editor.events?.onGizmoCommit(IDENTITY, moved);
+    expect(w.session.snapshot()).toMatchObject({ canUndo: true, dirty: true });
+    w.editor.events?.onGizmoCommit(moved, moved);
+    w.session.undo();
+    expect(w.editor.transform).toEqual(IDENTITY);
+    expect(w.session.snapshot().canUndo).toBe(false);
+  });
+
+  it('survives a save: saving clears the modified mark but not the history', async () => {
+    const w = world();
+    w.session.newPlaceholder();
+    w.session.setName('moss_boar');
+    w.session.setTransform(moved);
+    await w.session.save();
+    expect(w.session.snapshot()).toMatchObject({ dirty: false, canUndo: true });
+    w.session.undo();
+    expect(w.editor.transform).toEqual(IDENTITY);
+    expect(w.session.snapshot().dirty).toBe(true);
+  });
+
+  it('follows the gizmo mode and reports live moves without a command', () => {
+    const w = world();
+    w.session.newPlaceholder();
+    w.session.setGizmoMode('rotate');
+    expect(w.editor.modes).toEqual(['rotate']);
+    expect(w.session.snapshot().gizmoMode).toBe('rotate');
+    const before = w.states.length;
+    w.editor.events?.onGizmoMove();
+    expect(w.states.length).toBe(before + 1);
+    expect(w.session.snapshot().canUndo).toBe(false);
+  });
+});
+
+describe('unsaved changes', () => {
+  async function dirtyWorld() {
+    const w = world();
+    w.gateway.assets = [asset({ id: 'other', name: 'other' })];
+    w.session.setKind('creature');
+    await w.session.importModel({ name: 'moss_boar.glb', bytes: fixture('moss_boar.glb') });
+    expect(w.session.snapshot().dirty).toBe(true);
+    return w;
+  }
+
+  it('asks before a new placeholder, an import and a load, and no means stay', async () => {
+    const w = await dirtyWorld();
+    w.confirm.answer = false;
+    w.session.newPlaceholder();
+    await w.session.importModel({ name: 'moss_boar.gltf', bytes: fixture('moss_boar.gltf') });
+    await w.session.load(asset({ id: 'other', name: 'other' }));
+    expect(w.confirm.asked).toHaveLength(3);
+    expect(w.viewport.object).toEqual({ name: 'imported:glb' });
+    expect(w.session.snapshot()).toMatchObject({ dirty: true, activeId: null });
+  });
+
+  it('yes discards the work and clears the mark', async () => {
+    const w = await dirtyWorld();
+    w.confirm.answer = true;
+    w.session.newPlaceholder();
+    expect(w.viewport.object).toEqual({ name: 'placeholder_creature' });
+    expect(w.session.snapshot()).toMatchObject({ dirty: false, canUndo: false });
+  });
+
+  it('does not ask when nothing is unsaved', () => {
+    const w = world();
+    w.session.newPlaceholder();
+    w.session.newPlaceholder();
+    expect(w.confirm.asked).toEqual([]);
   });
 });

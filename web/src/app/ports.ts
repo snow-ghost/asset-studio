@@ -4,6 +4,8 @@
 // tested in Node in milliseconds (AGENTS.md, section 4).
 
 import type { Asset, Kind, SaveRequest } from '../domain/asset';
+import type { ImportFormat } from '../domain/import';
+import type { MaterialParams, ModelStats, Transform } from '../domain/model';
 
 /**
  * SceneObject is whatever the rendering adapter puts in the viewport. The app layer only needs a name for
@@ -28,10 +30,12 @@ export interface AssetGateway {
   payloadUrl(id: string): string;
 }
 
-/** ModelCodec turns a scene object into glb bytes and back. */
+/** ModelCodec turns a scene object into glb bytes and back, from a stored asset or from a file on disk. */
 export interface ModelCodec {
   export(obj: SceneObject): Promise<ArrayBuffer>;
   load(url: string): Promise<SceneObject>;
+  /** import parses bytes the designer picked; the domain has already checked they are glTF (domain/import). */
+  import(bytes: ArrayBuffer, format: ImportFormat): Promise<SceneObject>;
 }
 
 /** TextureCodec turns a texture source into png bytes, and a stored png into something to look at. */
@@ -50,6 +54,40 @@ export interface Placeholders {
 export interface ViewportPort {
   show(obj: SceneObject | null): void;
   readonly object: SceneObject | null;
+}
+
+export type GizmoMode = 'translate' | 'rotate' | 'scale';
+
+/** EditorEvents are the gestures the rendering adapter reports; the session decides what they mean. */
+export interface EditorEvents {
+  /** A click landed on a mesh (its id from ModelStats.meshList) or on empty space (null). */
+  onPick(meshId: string | null): void;
+  /** The gizmo is being dragged; the panels may follow live. No command yet. */
+  onGizmoMove(): void;
+  /** One gizmo drag ended: where the object was before it and where it is now. One command. */
+  onGizmoCommit(before: Transform, after: Transform): void;
+}
+
+/**
+ * EditorPort is the object in the viewport as something to edit: its transform, its materials by id, the
+ * numbers a designer reads off it, the selection frame and the gizmo. Commands (app/commands.ts) drive it;
+ * the adapter never decides anything, it only does and reports.
+ */
+export interface EditorPort {
+  getTransform(): Transform;
+  setTransform(t: Transform): void;
+  /** Materials are addressed by id so that two meshes sharing one are edited together, as in the file. */
+  getMaterial(materialId: string): MaterialParams | null;
+  setMaterial(materialId: string, params: MaterialParams): void;
+  stats(): ModelStats | null;
+  select(meshId: string | null): void;
+  setGizmoMode(mode: GizmoMode): void;
+  bind(events: EditorEvents): void;
+}
+
+/** ConfirmPort asks the designer a yes/no question before work is thrown away (invariant 10). */
+export interface ConfirmPort {
+  confirm(question: string): boolean;
 }
 
 /** StatusSink is where the designer is told what happened. Every async path ends here, never in the console. */

@@ -16,7 +16,7 @@
     "skipLibCheck": true,
     "isolatedModules": true,
     "verbatimModuleSyntax": true,
-    "types": []
+    "types": ["node"]
   },
   "include": [
     "src",

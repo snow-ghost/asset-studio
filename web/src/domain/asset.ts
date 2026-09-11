@@ -66,3 +66,11 @@ export function validateName(raw: string): NameCheck {
 export function defaultName(kind: Kind): string {
   return `${kind}_new`;
 }
+
+/**
+ * isDefaultName tells a name the studio made up from one the designer typed, so an import may replace the
+ * former with the file's name and must keep the latter (REQ-001-1).
+ */
+export function isDefaultName(name: string): boolean {
+  return KINDS.some((kind) => name === defaultName(kind));
+}

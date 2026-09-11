@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Asset Studio</title>
     <style>
-      :root { color-scheme: dark; --bg: #0d1117; --panel: #161b22; --line: #263041; --fg: #d7dee8; --accent: #4f83cc; }
+      :root { color-scheme: dark; --bg: #0d1117; --panel: #161b22; --line: #263041; --fg: #d7dee8; --accent: #4f83cc; --muted: #8b98a9; }
       * { box-sizing: border-box; }
       html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
         font: 13px/1.4 system-ui, sans-serif; }
@@ -14,25 +14,41 @@
         background: var(--panel); border-bottom: 1px solid var(--line); }
       header .brand { font-weight: 600; margin-right: 8px; }
       header .spacer { flex: 1; }
-      select, input, button { background: #0f141b; color: var(--fg); border: 1px solid var(--line);
+      select, input, button, label.button { background: #0f141b; color: var(--fg); border: 1px solid var(--line);
         border-radius: 6px; padding: 5px 9px; font: inherit; }
-      button { cursor: pointer; }
+      button, label.button { cursor: pointer; }
       button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-      button:hover { border-color: var(--accent); }
-      #status { color: #8b98a9; min-width: 120px; }
+      button:hover, label.button:hover { border-color: var(--accent); }
+      button:disabled { opacity: 0.45; cursor: default; }
+      #status { color: var(--muted); min-width: 120px; }
+      #dirty { color: #ffc857; font-weight: 600; }
       #body { display: flex; flex: 1; min-height: 0; }
       #sidebar { width: 240px; background: var(--panel); border-right: 1px solid var(--line);
         overflow-y: auto; padding: 8px; }
-      #sidebar h3 { margin: 4px 6px 8px; font-size: 12px; text-transform: uppercase; color: #8b98a9; }
+      aside h3 { margin: 4px 6px 8px; font-size: 12px; text-transform: uppercase; color: var(--muted); }
       #assetList { list-style: none; margin: 0; padding: 0; }
       #assetList li { padding: 7px 8px; border-radius: 6px; cursor: pointer; display: flex; justify-content: space-between; gap: 6px; }
       #assetList li:hover { background: #1c2330; }
       #assetList li.active { background: #22304a; }
-      #assetList .kind { color: #8b98a9; font-size: 11px; }
+      #assetList .kind { color: var(--muted); font-size: 11px; }
       #assetList .ref { color: var(--accent); font-size: 11px; }
       main { flex: 1; position: relative; min-width: 0; }
       canvas { display: block; width: 100%; height: 100%; }
-      .empty { color: #8b98a9; padding: 8px; }
+      .empty { color: var(--muted); padding: 8px; }
+      #inspector { width: 260px; background: var(--panel); border-left: 1px solid var(--line);
+        overflow-y: auto; padding: 8px 10px; }
+      #inspector section { margin-bottom: 14px; }
+      #inspector .muted { color: var(--muted); font-size: 12px; }
+      #inspector .row { display: flex; gap: 4px; align-items: center; margin: 4px 0; }
+      #inspector .row > span { width: 30px; color: var(--muted); font-size: 11px; }
+      #inspector input[type="number"] { width: 64px; padding: 3px 5px; }
+      #inspector input[type="color"] { width: 40px; height: 26px; padding: 1px 2px; }
+      #inspector .modes { display: flex; gap: 4px; margin-bottom: 6px; }
+      #inspector .modes button { flex: 1; padding: 4px 0; }
+      #inspector .modes button.active { border-color: var(--accent); background: #22304a; }
+      #inspector .history { display: flex; gap: 4px; }
+      #inspector .history button { flex: 1; }
+      #inspector label.field { display: flex; justify-content: space-between; align-items: center; gap: 6px; margin: 4px 0; }
     </style>
   </head>
   <body>
@@ -47,11 +63,14 @@
           <option value="texture">texture</option>
         </select>
         <button id="new">New placeholder</button>
+        <label for="import" class="button" title="Import a .glb or a self-contained .gltf">Import glTF</label>
+        <input type="file" id="import" accept=".glb,.gltf" hidden />
         <span class="spacer"></span>
         <input id="name" placeholder="name" size="16" />
         <input id="wowdRef" placeholder="wowd id (optional)" size="16" title="A wowd content id: creature_id, item id, zone id — links this asset into the game" />
         <button id="save" class="primary">Save</button>
         <span id="status"></span>
+        <span id="dirty" hidden>● modified</span>
       </header>
       <div id="body">
         <aside id="sidebar">
@@ -59,6 +78,50 @@
           <ul id="assetList"></ul>
         </aside>
         <main><canvas id="canvas"></canvas></main>
+        <aside id="inspector">
+          <section id="model">
+            <h3>Model</h3>
+            <div id="stats" class="muted"></div>
+            <div id="size"></div>
+          </section>
+          <section id="transform">
+            <h3>Transform</h3>
+            <div class="modes">
+              <button id="mode-translate" title="Move (W)">Move</button>
+              <button id="mode-rotate" title="Rotate (E)">Rotate</button>
+              <button id="mode-scale" title="Scale (R)">Scale</button>
+            </div>
+            <div class="row"><span>pos</span>
+              <input id="pos-x" type="number" step="any" title="position x, metres" />
+              <input id="pos-y" type="number" step="any" title="position y, metres" />
+              <input id="pos-z" type="number" step="any" title="position z, metres" />
+            </div>
+            <div class="row"><span>rot</span>
+              <input id="rot-x" type="number" step="any" title="rotation x, degrees" />
+              <input id="rot-y" type="number" step="any" title="rotation y, degrees" />
+              <input id="rot-z" type="number" step="any" title="rotation z, degrees" />
+            </div>
+            <div class="row"><span>scl</span>
+              <input id="scl-x" type="number" step="any" title="scale x" />
+              <input id="scl-y" type="number" step="any" title="scale y" />
+              <input id="scl-z" type="number" step="any" title="scale z" />
+            </div>
+          </section>
+          <section id="material" hidden>
+            <h3>Material</h3>
+            <div><span id="mesh-name"></span> <span id="material-name" class="muted"></span></div>
+            <label class="field">colour <input id="mat-color" type="color" /></label>
+            <label class="field">metalness <input id="mat-metalness" type="number" min="0" max="1" step="0.01" /></label>
+            <label class="field">roughness <input id="mat-roughness" type="number" min="0" max="1" step="0.01" /></label>
+          </section>
+          <section id="history">
+            <h3>History</h3>
+            <div class="history">
+              <button id="undo" title="Ctrl+Z">Undo</button>
+              <button id="redo" title="Ctrl+Shift+Z">Redo</button>
+            </div>
+          </section>
+        </aside>
       </div>
     </div>
     <script type="module" src="/src/main.ts"></script>
