@@ -152,11 +152,14 @@ HTTP-хендлер — три строки: декодировать DTO, вы�
 ```
 web/src/
   domain/         asset.ts (Asset, Kind, Format, formatFor(kind), правила валидации), manifest.ts,
-                  import.ts (правила приёма glTF), model.ts (Transform, MaterialParams, ModelStats), limits.ts
-  app/            session.ts (активный ассет, dirty, выбор, save/load/import через порты), commands.ts (History и команды с undo), ports.ts
+                  import.ts (одна дверь для файлов: PNG или glTF, соответствие виду), model.ts (Transform,
+                  MaterialParams, ModelStats), texture.ts (рецепт и генератор процедурной текстуры), limits.ts
+  app/            session.ts (активный ассет, dirty, выбор, save/load/import через порты), texture-work.ts
+                  (источник пикселей текстуры и что уходит при Save), commands.ts (History и команды с undo), ports.ts
   adapters/
     http/         api.ts — AssetGateway поверх fetch
-    three/        viewport.ts, placeholders.ts, gltf.ts (экспорт/импорт), texture.ts, editor.ts (гизмо, выбор, материалы, статистика)
+    three/        viewport.ts, placeholders.ts, gltf.ts (экспорт/импорт), texture.ts (пиксели ↔ canvas ↔ PNG),
+                  editor.ts (гизмо, выбор, материалы и текстуры), model-stats.ts
     ui/           sidebar.ts, toolbar.ts, status.ts, inspector.ts — только DOM, вызывают app
   main.ts         сборка и window.__studio для браузерных тестов
 web/tests/
