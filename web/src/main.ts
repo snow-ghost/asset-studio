@@ -6,7 +6,7 @@ import { ThreeEditor } from './adapters/three/editor';
 import { GltfCodec } from './adapters/three/gltf';
 import { threePlaceholders } from './adapters/three/placeholders';
 import { measure } from './adapters/three/scene-object';
-import { PngTextureCodec } from './adapters/three/texture';
+import { CanvasTextureCodec } from './adapters/three/texture';
 import { Viewport } from './adapters/three/viewport';
 import { browserConfirm } from './adapters/ui/confirm';
 import { el } from './adapters/ui/dom';
@@ -24,7 +24,7 @@ const status = new StatusLine(el<HTMLSpanElement>('status'));
 const session = new StudioSession({
   gateway: new HttpAssetGateway(apiBase),
   models: new GltfCodec(),
-  textures: new PngTextureCodec(),
+  textures: new CanvasTextureCodec(),
   placeholders: threePlaceholders,
   viewport,
   editor,
@@ -62,6 +62,18 @@ bindInspector(session, {
   color: el<HTMLInputElement>('mat-color'),
   metalness: el<HTMLInputElement>('mat-metalness'),
   roughness: el<HTMLInputElement>('mat-roughness'),
+  matTexture: el<HTMLSelectElement>('mat-texture'),
+  texture: el('texture'),
+  texSize: el('tex-size'),
+  texRecipe: el('tex-recipe'),
+  texNote: el('tex-note'),
+  texType: el<HTMLSelectElement>('tex-type'),
+  texRes: el<HTMLSelectElement>('tex-res'),
+  texColorA: el<HTMLInputElement>('tex-color-a'),
+  texColorB: el<HTMLInputElement>('tex-color-b'),
+  texScale: el<HTMLInputElement>('tex-scale'),
+  texSeed: el<HTMLInputElement>('tex-seed'),
+  texRandomize: el<HTMLButtonElement>('tex-randomize'),
   undo: el<HTMLButtonElement>('undo'),
   redo: el<HTMLButtonElement>('redo'),
   dirty: el('dirty'),
@@ -85,6 +97,9 @@ const debug: StudioDebug = {
   screenPositionOf: (meshName) => editor.screenPositionOf(meshName),
   gizmoHandleScreenPosition: (axis) => editor.gizmoHandleScreenPosition(axis),
   emptySpaceScreenPosition: () => editor.emptySpaceScreenPosition(),
+  texture: () => editor.textureDigest(),
+  procedural: () => session.snapshot().procedural,
+  materialTexture: (meshName) => editor.materialTextureDigest(meshName),
 };
 window.__studio = debug;
 

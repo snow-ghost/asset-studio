@@ -2,6 +2,8 @@
 // wowd's client. Pure data and rules: this file knows nothing about three.js, the DOM or HTTP, so the same
 // rules run in Node under Vitest and stay reusable wherever the studio grows (AGENTS.md, invariant 3).
 
+import type { TextureParams } from './texture';
+
 /** The kinds the studio understands, in the order the UI offers them. */
 export const KINDS = ['character', 'creature', 'item', 'landscape', 'texture'] as const;
 export type Kind = (typeof KINDS)[number];
@@ -16,6 +18,11 @@ export interface Asset {
   format: Format;
   tags?: string[];
   wowdRef?: string;
+  /**
+   * The recipe of a procedural texture, kept in the asset's metadata rather than inside the PNG: an outside
+   * editor re-saving the PNG would drop a text chunk, and <id>.json is untouched by that (spec 002).
+   */
+  procedural?: TextureParams;
   createdAt: string;
   updatedAt: string;
 }
@@ -31,6 +38,7 @@ export interface SaveRequest {
   format: Format;
   tags?: string[];
   wowdRef?: string;
+  procedural?: TextureParams;
 }
 
 export function isKind(value: string): value is Kind {

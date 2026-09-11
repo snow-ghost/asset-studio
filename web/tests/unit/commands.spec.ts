@@ -1,7 +1,7 @@
-// @req-001-3 @req-001-4 @req-001-5
+// @req-001-3 @req-001-4 @req-001-5 @req-002-4
 import { describe, expect, it } from 'vitest';
-import { HISTORY_DEPTH, History, SetMaterial, SetTransform, type Command } from '../../src/app/commands';
-import type { EditorEvents, EditorPort, GizmoMode } from '../../src/app/ports';
+import { HISTORY_DEPTH, History, SetMaterial, SetTexture, SetTransform, type Command } from '../../src/app/commands';
+import type { EditorEvents, EditorPort, GizmoMode, TextureHandle, TextureSource } from '../../src/app/ports';
 import { IDENTITY, type MaterialParams, type Transform } from '../../src/domain/model';
 
 function counter(log: string[], label: string): Command {
@@ -66,6 +66,16 @@ class RecordingEditor implements EditorPort {
   setMaterial(id: string, m: MaterialParams) {
     this.materials.set(id, m);
   }
+  textures = new Map<string, TextureHandle | null>([['m1', null]]);
+  getTexture(id: string) {
+    return this.textures.get(id) ?? null;
+  }
+  setTexture(id: string, t: TextureHandle | null) {
+    this.textures.set(id, t);
+  }
+  textureFrom(source: TextureSource): TextureHandle {
+    return { uuid: `tex-${source.width}x${source.height}` };
+  }
   stats() {
     return null;
   }
@@ -84,6 +94,23 @@ describe('SetTransform and SetMaterial', () => {
     editor.transform = { ...IDENTITY, scale: { x: 9, y: 9, z: 9 } }; // drifted meanwhile
     cmd.undo();
     expect(editor.transform).toEqual(IDENTITY);
+  });
+
+  it('put a texture on a material and take it off again', () => {
+    const editor = new RecordingEditor();
+    const bark = editor.textureFrom({ width: 64, height: 64 });
+    const cmd = new SetTexture(editor, 'm1', null, bark);
+    cmd.apply();
+    expect(editor.getTexture('m1')).toEqual({ uuid: 'tex-64x64' });
+    cmd.undo();
+    expect(editor.getTexture('m1')).toBeNull();
+    // Replacing one texture by another undoes back to the first, not to nothing.
+    const moss = { uuid: 'moss' };
+    editor.setTexture('m1', moss);
+    const swap = new SetTexture(editor, 'm1', moss, bark);
+    swap.apply();
+    swap.undo();
+    expect(editor.getTexture('m1')).toBe(moss);
   });
 
   it('edit one material by id', () => {

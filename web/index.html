@@ -63,8 +63,8 @@
           <option value="texture">texture</option>
         </select>
         <button id="new">New placeholder</button>
-        <label for="import" class="button" title="Import a .glb or a self-contained .gltf">Import glTF</label>
-        <input type="file" id="import" accept=".glb,.gltf" hidden />
+        <label for="import" class="button" title="Import a .glb or .gltf model, or a .png texture">Import file</label>
+        <input type="file" id="import" accept=".glb,.gltf,.png" hidden />
         <span class="spacer"></span>
         <input id="name" placeholder="name" size="16" />
         <input id="wowdRef" placeholder="wowd id (optional)" size="16" title="A wowd content id: creature_id, item id, zone id — links this asset into the game" />
@@ -113,6 +113,21 @@
             <label class="field">colour <input id="mat-color" type="color" /></label>
             <label class="field">metalness <input id="mat-metalness" type="number" min="0" max="1" step="0.01" /></label>
             <label class="field">roughness <input id="mat-roughness" type="number" min="0" max="1" step="0.01" /></label>
+            <label class="field">texture <select id="mat-texture" title="base colour texture"></select></label>
+          </section>
+          <section id="texture" hidden>
+            <h3>Texture</h3>
+            <div id="tex-size" class="muted"></div>
+            <div id="tex-note" class="muted" hidden>pixels kept as imported</div>
+            <div id="tex-recipe" hidden>
+              <label class="field">type <select id="tex-type"></select></label>
+              <label class="field">size <select id="tex-res"></select></label>
+              <label class="field">colour A <input id="tex-color-a" type="color" /></label>
+              <label class="field">colour B <input id="tex-color-b" type="color" /></label>
+              <label class="field">scale <input id="tex-scale" type="number" min="1" max="256" step="1" /></label>
+              <label class="field">seed <input id="tex-seed" type="number" min="0" step="1" /></label>
+              <button id="tex-randomize" title="a new random seed">Randomize</button>
+            </div>
           </section>
           <section id="history">
             <h3>History</h3>

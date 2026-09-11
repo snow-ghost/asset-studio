@@ -1,6 +1,7 @@
 import type { GizmoMode } from './app/ports';
 import type { SessionState } from './app/session';
 import type { MaterialParams, ModelStats, Transform } from './domain/model';
+import type { TextureParams } from './domain/texture';
 
 /**
  * The window hook the browser tests read (web/tests/e2e). One declaration, here, because `declare global`
@@ -32,6 +33,14 @@ export interface StudioDebug {
   gizmoHandleScreenPosition(axis: 'x' | 'y' | 'z'): { x: number; y: number } | null;
   /** Client coordinates of a point on the canvas where a click hits nothing. */
   emptySpaceScreenPosition(): { x: number; y: number };
+
+  // --- textures (M2) ---
+  /** The texture asset in the viewport: its size and a digest of its pixels (rows top first), or null. */
+  texture(): { width: number; height: number; digest: string } | null;
+  /** The recipe of the texture in the viewport, when it is procedural. */
+  procedural(): TextureParams | null;
+  /** The base colour texture on a mesh's material: size and pixel digest in the same orientation, or null when bare. */
+  materialTexture(meshName: string): { width: number; height: number; digest: string } | null;
 }
 
 declare global {

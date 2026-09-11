@@ -1,20 +1,19 @@
 import * as THREE from 'three';
 import type { Kind } from '../../domain/asset';
-import type { Placeholders } from '../../app/ports';
+import type { Placeholders, SceneObject } from '../../app/ports';
 
-// Placeholder geometry per asset kind. These are the starting point a designer replaces — a capsule for a
+// Placeholder geometry per model kind. These are the starting point a designer replaces — a capsule for a
 // body, a box for an item, a noisy patch for terrain — sized in metres to match wowd's world so scale reads
 // true from the first save. They are also exactly what wowd renders today (capsules), so wiring the manifest
 // in changes nothing visually until real geometry replaces them: a safe first integration.
+//
+// A texture has no placeholder geometry: the session starts a new texture from a recipe (domain/texture) and
+// shows it as a plane through the texture codec, so 'texture' is never asked of this port.
 const STONE = 0x8a94a6;
 
-/** threePlaceholders is the Placeholders port, backed by the functions below. */
-export const threePlaceholders: Placeholders = {
-  make: makePlaceholder,
-  textureCanvas: makeTextureCanvas,
-};
+export const threePlaceholders: Placeholders = { make: makePlaceholder };
 
-export function makePlaceholder(kind: Kind): THREE.Object3D {
+export function makePlaceholder(kind: Kind): SceneObject {
   switch (kind) {
     case 'character':
       return body(0.3, 1.2, 0x6f9ceb);
@@ -25,7 +24,9 @@ export function makePlaceholder(kind: Kind): THREE.Object3D {
     case 'landscape':
       return landscape();
     case 'texture':
-      return texturePreview();
+      // Unreachable: a texture is made from a recipe, not from a placeholder mesh. A blank plane rather than
+      // a throw keeps the exhaustive switch total without a crash path if the flow ever changes.
+      return blankPlane();
   }
 }
 
@@ -60,36 +61,14 @@ function landscape(): THREE.Mesh {
     pos.setY(i, h);
   }
   geo.computeVertexNormals();
-  const mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: 0x3a5a40, roughness: 0.95, flatShading: false }));
+  const mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: 0x3a5a40, roughness: 0.95 }));
   mesh.name = 'placeholder_landscape';
   return mesh;
 }
 
-function texturePreview(): THREE.Mesh {
-  const tex = new THREE.CanvasTexture(makeTextureCanvas());
-  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.MeshBasicMaterial({ map: tex }));
+function blankPlane(): THREE.Mesh {
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.MeshBasicMaterial({ color: 0x222222 }));
   mesh.position.y = 1;
   mesh.name = 'placeholder_texture';
   return mesh;
-}
-
-// makeTextureCanvas draws a procedural placeholder texture. A texture asset is saved as the PNG this canvas
-// produces (see adapters/three/texture.ts), not as a model.
-export function makeTextureCanvas(size = 256): HTMLCanvasElement {
-  const canvas = document.createElement('canvas');
-  canvas.width = size;
-  canvas.height = size;
-  const ctx = canvas.getContext('2d');
-  if (!ctx) return canvas;
-  const cells = 8;
-  const step = size / cells;
-  for (let y = 0; y < cells; y++) {
-    for (let x = 0; x < cells; x++) {
-      const t = (Math.sin(x * 1.3) * Math.cos(y * 1.1) + 1) / 2;
-      const shade = Math.floor(60 + t * 120);
-      ctx.fillStyle = `rgb(${shade}, ${shade + 20}, ${shade + 8})`;
-      ctx.fillRect(x * step, y * step, step, step);
-    }
-  }
-  return canvas;
 }

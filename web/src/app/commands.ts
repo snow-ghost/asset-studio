@@ -4,7 +4,7 @@
 // one small class rather than a special case in the session.
 
 import type { MaterialParams, Transform } from '../domain/model';
-import type { EditorPort } from './ports';
+import type { EditorPort, TextureHandle } from './ports';
 
 export interface Command {
   readonly label: string;
@@ -95,5 +95,25 @@ export class SetMaterial implements Command {
 
   undo(): void {
     this.editor.setMaterial(this.material, this.before);
+  }
+}
+
+/** SetTexture puts a texture on a material's base colour slot, or takes it off; undo restores whatever was there. */
+export class SetTexture implements Command {
+  readonly label = 'texture';
+
+  constructor(
+    private readonly editor: EditorPort,
+    private readonly material: string,
+    private readonly before: TextureHandle | null,
+    private readonly after: TextureHandle | null,
+  ) {}
+
+  apply(): void {
+    this.editor.setTexture(this.material, this.after);
+  }
+
+  undo(): void {
+    this.editor.setTexture(this.material, this.before);
   }
 }

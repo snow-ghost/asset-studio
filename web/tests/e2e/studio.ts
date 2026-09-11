@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 import type { MaterialParams, ModelStats, Transform } from '../../src/domain/model';
 
@@ -201,4 +202,76 @@ export async function expectModified(page: Page, modified: boolean): Promise<voi
     await expect(marker).toBeHidden();
     await expect.poll(() => page.title()).toBe('Asset Studio');
   }
+}
+
+
+// --- textures (M2) ---
+
+export interface TexDigest {
+  width: number;
+  height: number;
+  digest: string;
+}
+
+export const tex = {
+  shown: (page: Page): Promise<TexDigest | null> => page.evaluate(() => window.__studio?.texture() ?? null),
+  procedural: (page: Page): Promise<Record<string, unknown> | null> =>
+    page.evaluate(() => (window.__studio?.procedural() as Record<string, unknown> | null) ?? null),
+  onMesh: (page: Page, mesh: string): Promise<TexDigest | null> =>
+    page.evaluate((name) => window.__studio?.materialTexture(name) ?? null, mesh),
+  size: (page: Page): Promise<{ width: number; height: number } | null> =>
+    page.evaluate(() => window.__studio?.state().textureSize ?? null),
+};
+
+/** importTexture picks a PNG through the real file input and waits for it to reach the viewport. */
+export async function importTexture(page: Page, file = 'bark_diffuse.png'): Promise<void> {
+  await importFile(page, file, 'texture');
+  await expect.poll(() => tex.shown(page)).not.toBeNull();
+}
+
+/** newTexture starts a fresh procedural texture and waits for its recipe to appear. */
+export async function newTexture(page: Page): Promise<void> {
+  await page.selectOption('#kind', 'texture');
+  await page.click('#new');
+  await expect(page.locator('#tex-recipe')).toBeVisible();
+}
+
+export async function setRecipe(page: Page, patch: Record<string, string | number>): Promise<void> {
+  const ids: Record<string, string> = { type: 'tex-type', size: 'tex-res', colorA: 'tex-color-a', colorB: 'tex-color-b', scale: 'tex-scale', seed: 'tex-seed' };
+  for (const [key, value] of Object.entries(patch)) {
+    const id = ids[key];
+    if (!id) continue;
+    const control = page.locator(`#${id}`);
+    if (id === 'tex-type' || id === 'tex-res') await control.selectOption(String(value));
+    else if (id === 'tex-color-a' || id === 'tex-color-b') await control.fill(String(value));
+    else await setField(page, id, String(value));
+  }
+}
+
+/** chooseTexture selects a base-colour texture for the current material by its label in the panel. */
+export async function chooseTexture(page: Page, label: string): Promise<void> {
+  await page.locator('#mat-texture').selectOption({ label });
+}
+
+/** saveTextureFile saves the fixture PNG as a named texture asset, without going through the viewport preview edits. */
+export async function saveTextureFile(page: Page, name: string, file = 'bark_diffuse.png'): Promise<void> {
+  await importTexture(page, file);
+  await saveAs(page, name);
+}
+
+export async function storedPayload(request: APIRequestContext, name: string): Promise<Buffer> {
+  const assets = (await (await request.get('/api/assets')).json()) as Array<{ id: string; name: string }>;
+  const asset = assets.find((a) => a.name === name);
+  expect(asset, `asset ${name} exists`).toBeTruthy();
+  const res = await request.get(`/api/assets/${asset?.id}/payload`);
+  return Buffer.from(await res.body());
+}
+
+export function fixtureBytes(file: string): Buffer {
+  return readFileSync(fixture(file));
+}
+
+/** pngDimensions reads width and height from a PNG's IHDR chunk (bytes 16..24, big-endian). */
+export function pngDimensions(buffer: Buffer): { width: number; height: number } {
+  return { width: buffer.readUInt32BE(16), height: buffer.readUInt32BE(20) };
 }

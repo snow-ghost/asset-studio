@@ -4,7 +4,7 @@
 // tests/unit/session.spec.ts wires it to fakes.
 
 import { defaultName, formatFor, isDefaultName, validateName, type Asset, type Kind } from '../domain/asset';
-import { inspectModelFile, nameFromFile } from '../domain/import';
+import { inspectImport, nameFromFile } from '../domain/import';
 import {
   formatSize,
   validMaterial,
@@ -13,7 +13,8 @@ import {
   type ModelStats,
   type Transform,
 } from '../domain/model';
-import { History, SetMaterial, SetTransform } from './commands';
+import type { TextureParams } from '../domain/texture';
+import { History, SetMaterial, SetTexture, SetTransform } from './commands';
 import type {
   AssetGateway,
   ConfirmPort,
@@ -21,11 +22,12 @@ import type {
   GizmoMode,
   ModelCodec,
   Placeholders,
+  SceneObject,
   StatusSink,
   TextureCodec,
-  TextureSource,
   ViewportPort,
 } from './ports';
+import { TextureWork } from './texture-work';
 
 export interface SessionPorts {
   gateway: AssetGateway;
@@ -44,6 +46,14 @@ export interface ImportedFile {
   readonly bytes: ArrayBuffer;
 }
 
+/** What the selected mesh's material wears on its base colour slot, as far as the session can tell. */
+export interface MaterialTexture {
+  /** A texture is on the slot. */
+  readonly present: boolean;
+  /** The studio asset it came from, when it was put there in this session; null for one that came with the model. */
+  readonly assetId: string | null;
+}
+
 export interface SessionState {
   readonly activeId: string | null;
   readonly kind: Kind;
@@ -57,11 +67,15 @@ export interface SessionState {
   readonly selectedMesh: string | null;
   /** The selected mesh's material, or null when nothing is selected or the material is not editable. */
   readonly material: MaterialParams | null;
+  readonly materialTexture: MaterialTexture | null;
   readonly transform: Transform | null;
   readonly stats: ModelStats | null;
   readonly canUndo: boolean;
   readonly canRedo: boolean;
   readonly gizmoMode: GizmoMode;
+  /** The texture asset in the viewport: its pixel size, and its recipe when it is procedural. */
+  readonly textureSize: { width: number; height: number } | null;
+  readonly procedural: TextureParams | null;
 }
 
 export type Listener = (state: SessionState) => void;
@@ -77,11 +91,14 @@ export class StudioSession {
   private selectedMesh: string | null = null;
   private gizmoMode: GizmoMode = 'translate';
   private readonly history = new History();
-  // The source behind a texture placeholder, kept so Save can emit its PNG.
-  private pendingTexture: TextureSource | null = null;
+  private readonly texture: TextureWork;
+  // Which studio asset each scene texture came from, for the material panel; textures that came with a
+  // model are not in here and show as "embedded".
+  private readonly textureAssets = new Map<string, string>();
   private readonly listeners = new Set<Listener>();
 
   constructor(private readonly ports: SessionPorts) {
+    this.texture = new TextureWork(ports.textures);
     ports.editor.bind({
       onPick: (meshId) => this.select(meshId),
       onGizmoMove: () => this.emit(),
@@ -108,11 +125,14 @@ export class StudioSession {
       dirty: this.dirty,
       selectedMesh: this.selectedMesh,
       material: this.selectedMaterialParams(),
+      materialTexture: this.selectedMaterialTexture(),
       transform: hasObject ? this.ports.editor.getTransform() : null,
       stats: hasObject ? this.ports.editor.stats() : null,
       canUndo: this.history.canUndo,
       canRedo: this.history.canRedo,
       gizmoMode: this.gizmoMode,
+      textureSize: this.texture.size(),
+      procedural: this.texture.procedural,
     };
   }
 
@@ -131,31 +151,43 @@ export class StudioSession {
   newPlaceholder(): void {
     if (!this.leaveUnsaved('Discard unsaved changes and start a new placeholder?')) return;
     this.activeId = null;
-    this.pendingTexture = this.kind === 'texture' ? this.ports.placeholders.textureCanvas() : null;
-    this.replaceObject(this.ports.placeholders.make(this.kind));
+    if (this.kind === 'texture') {
+      // A new texture is a recipe with default numbers: there is nothing to draw yet, and a recipe is
+      // something the designer can change, unlike a fixed picture.
+      this.replaceObject(this.texture.startRecipe());
+    } else {
+      this.replaceObject(this.ports.placeholders.make(this.kind));
+      this.texture.forget();
+    }
     if (!this.name) this.name = defaultName(this.kind);
     this.ports.status.info(`new ${this.kind} placeholder — edit and Save`);
     this.emit();
   }
 
-  /** importModel takes a file the designer picked. The domain decides whether it is usable; three.js parses it. */
-  async importModel(file: ImportedFile): Promise<void> {
+  /** importFile takes a file the designer picked: a glTF for a model kind, a PNG for a texture. */
+  async importFile(file: ImportedFile): Promise<void> {
     if (!this.leaveUnsaved(`Discard unsaved changes and import ${file.name}?`)) return;
-    const verdict = inspectModelFile(file.bytes, this.kind);
+    const verdict = inspectImport(file.bytes, this.kind);
     if (!verdict.ok) {
       this.ports.status.error(`import refused: ${verdict.reason}`);
       return;
     }
     try {
       this.ports.status.info(`importing ${file.name}…`);
-      const obj = await this.ports.models.import(file.bytes, verdict.format);
+      if (verdict.format === 'png') {
+        this.replaceObject(await this.texture.fromImport(file.bytes));
+        const size = this.texture.size();
+        this.ports.status.info(`imported ${file.name}: ${size?.width} × ${size?.height} px`);
+      } else {
+        const obj = await this.ports.models.import(file.bytes, verdict.format);
+        this.replaceObject(obj);
+        this.texture.forget();
+        this.ports.status.info(`imported ${file.name}: ${describe(this.ports.editor.stats())}`);
+      }
       this.activeId = null;
-      this.pendingTexture = null;
-      this.replaceObject(obj);
       // A name the designer typed is theirs; one the studio made up gives way to the file's.
       if (!this.name || isDefaultName(this.name)) this.name = nameFromFile(file.name);
       this.dirty = true;
-      this.ports.status.info(`imported ${file.name}: ${describe(this.ports.editor.stats())}`);
     } catch (err) {
       this.ports.status.error(`import failed: ${message(err)}`);
     }
@@ -176,12 +208,7 @@ export class StudioSession {
     try {
       this.ports.status.info('saving…');
       const format = formatFor(this.kind);
-      // A texture is saved from the canvas behind its placeholder; a loaded texture has none, so it is
-      // re-rendered procedurally — the M0 behaviour, which M2 (texture editing) replaces.
-      const bytes =
-        format === 'png'
-          ? await this.ports.textures.encode(this.pendingTexture ?? this.ports.placeholders.textureCanvas())
-          : await this.ports.models.export(obj);
+      const payload = format === 'png' ? await this.texture.payload(this.activeId !== null) : await this.ports.models.export(obj);
       const saved = await this.ports.gateway.save(
         {
           id: this.activeId ?? undefined,
@@ -189,12 +216,14 @@ export class StudioSession {
           kind: this.kind,
           format,
           wowdRef: this.wowdRef.trim() || undefined,
+          procedural: format === 'png' ? (this.texture.procedural ?? undefined) : undefined,
         },
-        bytes,
+        payload,
       );
       this.activeId = saved.id;
       // Saved is not the same as forgotten: the history stays, so a save can still be undone (REQ-001-4).
       this.dirty = false;
+      this.texture.markSaved();
       this.ports.status.info(`saved ${saved.name}`);
       await this.refreshList();
     } catch (err) {
@@ -210,10 +239,13 @@ export class StudioSession {
       this.kind = asset.kind;
       this.name = asset.name;
       this.wowdRef = asset.wowdRef ?? '';
-      this.pendingTexture = null;
       const url = this.ports.gateway.payloadUrl(asset.id);
-      const obj = asset.format === 'png' ? await this.ports.textures.load(url) : await this.ports.models.load(url);
-      this.replaceObject(obj);
+      if (asset.format === 'png') {
+        this.replaceObject(await this.texture.fromAsset(url, asset.procedural));
+      } else {
+        this.replaceObject(await this.ports.models.load(url));
+        this.texture.forget();
+      }
       this.ports.status.info(`loaded ${asset.name}`);
     } catch (err) {
       this.ports.status.error(`load failed: ${message(err)}`);
@@ -227,6 +259,7 @@ export class StudioSession {
       if (this.activeId === id) {
         this.activeId = null;
         this.replaceObject(null);
+        this.texture.forget();
       }
       await this.refreshList();
       this.ports.status.info('deleted');
@@ -247,7 +280,7 @@ export class StudioSession {
     this.emit();
   }
 
-  // --- editing ---
+  // --- editing a model ---
 
   /** setTransform is the numeric panel's path: one command per accepted edit. Returns whether it was accepted. */
   setTransform(after: Transform): boolean {
@@ -286,6 +319,36 @@ export class StudioSession {
     return true;
   }
 
+  /** assignTexture puts a studio texture asset on the selected material's base colour, or takes it off with null. */
+  async assignTexture(assetId: string | null): Promise<boolean> {
+    const materialId = this.selectedMaterialId();
+    if (!materialId || !this.ports.editor.getMaterial(materialId)) {
+      this.ports.status.error('select a mesh with an editable material first');
+      return false;
+    }
+    const asset = assetId ? this.assets.find((a) => a.id === assetId) : null;
+    if (assetId && (!asset || asset.kind !== 'texture')) {
+      this.ports.status.error('pick one of the studio\'s texture assets');
+      return false;
+    }
+    try {
+      const before = this.ports.editor.getTexture(materialId);
+      let after = null;
+      if (asset) {
+        const source = await this.ports.textures.fromUrl(this.ports.gateway.payloadUrl(asset.id));
+        after = this.ports.editor.textureFrom(source);
+        this.textureAssets.set(after.uuid, asset.id);
+      }
+      this.history.push(new SetTexture(this.ports.editor, materialId, before, after));
+      this.ports.status.info(asset ? `texture ${asset.name} on ${this.selectedMeshName() ?? 'the mesh'}` : 'texture removed');
+      this.touch();
+      return true;
+    } catch (err) {
+      this.ports.status.error(`texture failed: ${message(err)}`);
+      return false;
+    }
+  }
+
   undo(): void {
     if (this.history.undo()) this.touch();
   }
@@ -300,6 +363,22 @@ export class StudioSession {
     this.emit();
   }
 
+  // --- editing a texture ---
+
+  /** setTextureParams changes the recipe and re-renders it. Returns whether the new recipe was accepted. */
+  setTextureParams(patch: Partial<TextureParams>): boolean {
+    const change = this.texture.setParams(patch);
+    if (!change.ok) {
+      this.ports.status.error(change.reason);
+      this.emit();
+      return false;
+    }
+    // The preview is swapped without replaceObject: the asset, its history and its "modified" mark stay.
+    this.ports.viewport.show(change.object);
+    this.touch();
+    return true;
+  }
+
   // --- internals ---
 
   /** commitGizmo records a finished drag as one command; the object is already where the drag left it. */
@@ -310,10 +389,11 @@ export class StudioSession {
   }
 
   /** replaceObject swaps what the viewport shows and forgets everything that belonged to the old object. */
-  private replaceObject(obj: Parameters<ViewportPort['show']>[0]): void {
+  private replaceObject(obj: SceneObject | null): void {
     this.selectedMesh = null;
     this.ports.editor.select(null);
     this.history.clear();
+    this.textureAssets.clear();
     this.dirty = false;
     this.ports.viewport.show(obj);
   }
@@ -334,9 +414,21 @@ export class StudioSession {
     return mesh?.material ?? null;
   }
 
+  private selectedMeshName(): string | null {
+    return this.ports.editor.stats()?.meshList.find((m) => m.id === this.selectedMesh)?.name ?? null;
+  }
+
   private selectedMaterialParams(): MaterialParams | null {
     const id = this.selectedMaterialId();
     return id ? this.ports.editor.getMaterial(id) : null;
+  }
+
+  private selectedMaterialTexture(): MaterialTexture | null {
+    const id = this.selectedMaterialId();
+    if (!id || !this.ports.editor.getMaterial(id)) return null;
+    const handle = this.ports.editor.getTexture(id);
+    if (!handle) return { present: false, assetId: null };
+    return { present: true, assetId: this.textureAssets.get(handle.uuid) ?? null };
   }
 
   private emit(): void {
@@ -358,3 +450,4 @@ function sameTransform(a: Transform, b: Transform): boolean {
 function message(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
+

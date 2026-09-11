@@ -1,8 +1,10 @@
 import * as THREE from 'three';
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
-import type { EditorEvents, EditorPort, GizmoMode } from '../../app/ports';
-import { IDENTITY, type MaterialParams, type MeshInfo, type ModelStats, type Transform, type Vec3 } from '../../domain/model';
+import type { EditorEvents, EditorPort, GizmoMode, TextureHandle, TextureSource } from '../../app/ports';
+import { IDENTITY, type MaterialParams, type MeshInfo, type ModelStats, type Transform } from '../../domain/model';
 import type { Viewport } from './viewport';
+import { asArray, digestImage, editable, firstOf, localSize, spiral, texturesOf, tidy, type Editable, type TextureDigest } from './model-stats';
+import { textureFrom } from './texture';
 
 // The object in the viewport as something to edit. The editor does and reports; it decides nothing —
 // what a click means, whether a transform is acceptable, what goes into the history is the session's
@@ -11,8 +13,6 @@ import type { Viewport } from './viewport';
 const HIGHLIGHT = 0xffc857;
 // A click is a press and release that did not travel; anything farther is an orbit drag.
 const CLICK_SLOP_PX = 4;
-
-type Editable = THREE.MeshStandardMaterial;
 
 export class ThreeEditor implements EditorPort {
   private readonly controls: TransformControls;
@@ -27,7 +27,6 @@ export class ThreeEditor implements EditorPort {
     this.controls.size = 0.9;
     viewport.scene.add(this.controls.getHelper());
 
-    // The orbit camera and the gizmo share the canvas; while a handle is being dragged the camera holds still.
     this.controls.addEventListener('dragging-changed', (e) => {
       viewport.controls.enabled = e.value !== true;
     });
@@ -45,8 +44,7 @@ export class ThreeEditor implements EditorPort {
       if (obj) this.controls.attach(obj);
       else this.controls.detach();
     });
-    // The selection frame is drawn from the mesh's current bounds, so it follows a gizmo drag.
-    viewport.onFrame(() => this.frame?.update());
+    this.viewport.onFrame(() => this.frame?.update());
 
     viewport.canvas.addEventListener('pointerdown', (e) => this.onPointerDown(e));
     viewport.canvas.addEventListener('pointerup', (e) => this.onPointerUp(e));
@@ -77,7 +75,7 @@ export class ThreeEditor implements EditorPort {
     o.updateMatrixWorld(true);
   }
 
-  // --- materials ---
+  // --- materials and textures ---
 
   getMaterial(materialId: string): MaterialParams | null {
     const m = this.materials().get(materialId);
@@ -90,6 +88,22 @@ export class ThreeEditor implements EditorPort {
     m.color.set(params.color);
     m.metalness = params.metalness;
     m.roughness = params.roughness;
+  }
+
+  getTexture(materialId: string): TextureHandle | null {
+    return this.materials().get(materialId)?.map ?? null;
+  }
+
+  setTexture(materialId: string, texture: TextureHandle | null): void {
+    const m = this.materials().get(materialId);
+    if (!m) return;
+    // The handle is a scene texture the session got from this editor; nothing else can produce one.
+    m.map = texture instanceof THREE.Texture ? texture : null;
+    m.needsUpdate = true;
+  }
+
+  textureFrom(source: TextureSource): TextureHandle {
+    return textureFrom(source);
   }
 
   // --- reading the model ---
@@ -110,15 +124,7 @@ export class ThreeEditor implements EditorPort {
       meshList.push({ id: mesh.uuid, name: mesh.name, vertices: v, indices: i, material: material?.uuid ?? null });
       for (const m of asArray(mesh.material)) for (const t of texturesOf(m)) textures.add(t);
     }
-    return {
-      meshes: meshList.length,
-      vertices,
-      indices,
-      size: localSize(root, this.meshes()),
-      textures: textures.size,
-      animations: root.animations.length,
-      meshList,
-    };
+    return { meshes: meshList.length, vertices, indices, size: localSize(root, this.meshes()), textures: textures.size, animations: root.animations.length, meshList };
   }
 
   select(meshId: string | null): void {
@@ -151,15 +157,28 @@ export class ThreeEditor implements EditorPort {
     return this.meshes().find((m) => m.uuid === meshId)?.name ?? null;
   }
 
-  /** screenPositionOf is a client-space point where a click lands on that mesh first, or null if it cannot be hit. */
+  /** texture digests the texture asset shown on the preview plane (a MeshBasicMaterial's map). */
+  textureDigest(): TextureDigest | null {
+    for (const mesh of this.meshes()) {
+      const m = firstOf(mesh.material);
+      if (m instanceof THREE.MeshBasicMaterial && m.map) return digest(m.map);
+    }
+    return null;
+  }
+
+  /** materialTextureDigest digests the base-colour texture on a mesh's material, or null when it is bare. */
+  materialTextureDigest(meshName: string): TextureDigest | null {
+    const mesh = this.meshes().find((m) => m.name === meshName);
+    const map = mesh ? editable(firstOf(mesh.material))?.map : null;
+    return map ? digest(map) : null;
+  }
+
   screenPositionOf(meshName: string): { x: number; y: number } | null {
     const mesh = this.meshes().find((m) => m.name === meshName);
     if (!mesh) return null;
     const centre = new THREE.Box3().setFromObject(mesh).getCenter(new THREE.Vector3());
     const p = this.viewport.project(centre);
     if (!p) return null;
-    // The centre may be behind another mesh or outside a concave shape; look around it for a pixel where this
-    // mesh is the first thing the ray meets.
     for (const [dx, dy] of spiral(60, 6)) {
       const q = { x: p.x + dx, y: p.y + dy };
       if (this.pick(q.x, q.y) === mesh) return q;
@@ -167,7 +186,6 @@ export class ThreeEditor implements EditorPort {
     return null;
   }
 
-  /** gizmoHandleScreenPosition is where the translate arrow of an axis actually is — the pixel a drag must start on. */
   gizmoHandleScreenPosition(axis: 'x' | 'y' | 'z'): { x: number; y: number } | null {
     const picker = this.pickers('translate').find((o) => o.name === axis.toUpperCase());
     if (!picker) return null;
@@ -176,7 +194,6 @@ export class ThreeEditor implements EditorPort {
     return this.viewport.project(centre);
   }
 
-  /** emptySpaceScreenPosition is a canvas point where a click hits neither the model nor a gizmo handle. */
   emptySpaceScreenPosition(): { x: number; y: number } {
     const rect = this.viewport.canvas.getBoundingClientRect();
     const corners: Array<[number, number]> = [
@@ -201,7 +218,6 @@ export class ThreeEditor implements EditorPort {
 
   private onPointerDown(e: PointerEvent): void {
     if (e.button !== 0) return;
-    // TransformControls listens first; if it took the press, the gizmo owns this gesture.
     this.press = { x: e.clientX, y: e.clientY, onGizmo: this.controls.axis !== null || this.controls.dragging };
   }
 
@@ -252,59 +268,8 @@ export class ThreeEditor implements EditorPort {
   }
 }
 
-function asArray(m: THREE.Material | THREE.Material[]): THREE.Material[] {
-  return Array.isArray(m) ? m : [m];
-}
-
-function firstOf(m: THREE.Material | THREE.Material[]): THREE.Material | undefined {
-  return Array.isArray(m) ? m[0] : m;
-}
-
-/** editable is the metallic-roughness family glTF describes; anything else (unlit, lines) has no such knobs. */
-function editable(m: THREE.Material | undefined): Editable | null {
-  return m instanceof THREE.MeshStandardMaterial ? m : null;
-}
-
-function texturesOf(m: THREE.Material): THREE.Texture[] {
-  if (m instanceof THREE.MeshStandardMaterial) {
-    return [m.map, m.normalMap, m.roughnessMap, m.metalnessMap, m.emissiveMap, m.aoMap].filter((t): t is THREE.Texture => t !== null);
-  }
-  if (m instanceof THREE.MeshBasicMaterial && m.map) return [m.map];
-  return [];
-}
-
-/**
- * localSize is the model's own dimensions: its bounds in the root's frame, times the root's scale. The
- * world-space box would grow when the model is turned, and a boar is as long facing east as facing north.
- */
-function localSize(root: THREE.Object3D, meshes: THREE.Mesh[]): Vec3 {
-  root.updateMatrixWorld(true);
-  const toRoot = root.matrixWorld.clone().invert();
-  const box = new THREE.Box3();
-  for (const mesh of meshes) {
-    mesh.geometry.computeBoundingBox();
-    const bounds = mesh.geometry.boundingBox;
-    if (bounds) box.union(bounds.clone().applyMatrix4(mesh.matrixWorld).applyMatrix4(toRoot));
-  }
-  if (box.isEmpty()) return { x: 0, y: 0, z: 0 };
-  const size = box.getSize(new THREE.Vector3()).multiply(root.scale);
-  return { x: size.x, y: size.y, z: size.z };
-}
-
-/** tidy rounds away floating-point noise (a 90° turn reads as 90, not 90.00000000000001) and -0. */
-function tidy(v: { x: number; y: number; z: number }): Vec3 {
-  const r = (n: number): number => Math.round(n * 1e6) / 1e6 || 0;
-  return { x: r(v.x), y: r(v.y), z: r(v.z) };
-}
-
-/** spiral yields pixel offsets by growing distance, the centre first. */
-function spiral(maxRadius: number, step: number): Array<[number, number]> {
-  const out: Array<[number, number]> = [[0, 0]];
-  for (let r = step; r <= maxRadius; r += step) {
-    for (let k = 0; k < 16; k++) {
-      const a = (k / 16) * Math.PI * 2;
-      out.push([Math.round(r * Math.cos(a)), Math.round(r * Math.sin(a))]);
-    }
-  }
-  return out;
+/** digest hashes a scene texture's pixels; its image is a canvas, an ImageBitmap or an <img>. */
+function digest(tex: THREE.Texture): TextureDigest | null {
+  const image = tex.image as (CanvasImageSource & { width: number; height: number }) | null;
+  return image ? digestImage(image) : null;
 }

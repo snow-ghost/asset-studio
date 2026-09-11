@@ -35,7 +35,7 @@ export function bindToolbar(session: StudioSession, els: ToolbarElements, status
       try {
         const bytes = await file.arrayBuffer();
         kindFromSelect();
-        await session.importModel({ name: file.name, bytes });
+        await session.importFile({ name: file.name, bytes });
       } catch (err) {
         status.error(`import failed: ${err instanceof Error ? err.message : String(err)}`);
       } finally {

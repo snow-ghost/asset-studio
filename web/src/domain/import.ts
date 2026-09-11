@@ -5,7 +5,7 @@
 import type { Kind } from './asset';
 import { MAX_PAYLOAD_BYTES, formatMiB } from './limits';
 
-export type ImportFormat = 'glb' | 'gltf';
+export type ImportFormat = 'glb' | 'gltf' | 'png';
 export type ImportVerdict = { ok: true; format: ImportFormat } | { ok: false; reason: string };
 
 // "glTF" and "JSON" as little-endian uint32, as the GLB container spec writes them.
@@ -13,6 +13,10 @@ const GLB_MAGIC = 0x46546c67;
 const CHUNK_JSON = 0x4e4f534a;
 const GLB_HEADER_BYTES = 12;
 const CHUNK_HEADER_BYTES = 8;
+
+const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+// Signature (8), then the IHDR chunk: length (4), type (4), width (4), height (4), big-endian.
+const PNG_IHDR_WIDTH_OFFSET = 16;
 
 /**
  * Extensions the studio would have to decode to show the model. It has no decoder (no Draco, no meshopt),
@@ -29,9 +33,45 @@ interface GltfDocument {
   images?: { uri?: unknown; bufferView?: unknown }[];
 }
 
-/** Only model kinds import glTF; a texture is a PNG and arrives another way (M2). */
+/** Only model kinds import glTF; a texture is a PNG. */
 export function canImportModel(kind: Kind): boolean {
   return kind !== 'texture';
+}
+
+export function isPng(bytes: ArrayBuffer): boolean {
+  if (bytes.byteLength < PNG_SIGNATURE.length) return false;
+  const view = new Uint8Array(bytes, 0, PNG_SIGNATURE.length);
+  return PNG_SIGNATURE.every((b, i) => view[i] === b);
+}
+
+/** pngSize reads the dimensions from the IHDR chunk, which the format requires to come first. */
+export function pngSize(bytes: ArrayBuffer): { width: number; height: number } | null {
+  if (!isPng(bytes) || bytes.byteLength < PNG_IHDR_WIDTH_OFFSET + 8) return null;
+  const view = new DataView(bytes);
+  return { width: view.getUint32(PNG_IHDR_WIDTH_OFFSET, false), height: view.getUint32(PNG_IHDR_WIDTH_OFFSET + 4, false) };
+}
+
+/**
+ * inspectImport is the one door for a file from disk: it tells a PNG from a glTF by the bytes, then asks
+ * whether the chosen kind can take it. The order matters for the message the designer reads — a PNG under a
+ * model kind is told to switch kind, not that it is "not glTF".
+ */
+export function inspectImport(bytes: ArrayBuffer, kind: Kind, limit = MAX_PAYLOAD_BYTES): ImportVerdict {
+  if (bytes.byteLength > limit) {
+    return refuse(`the file is ${formatMiB(bytes.byteLength)}; the limit is ${formatMiB(limit)}`);
+  }
+  if (isPng(bytes)) {
+    if (kind !== 'texture') return refuse('a PNG is a texture — pick the texture kind; models are imported as glTF');
+    return pngSize(bytes) ? { ok: true, format: 'png' } : refuse('the PNG has no readable header');
+  }
+  const parsed = parseGltf(bytes);
+  if (!parsed) {
+    return refuse('not a glTF or PNG file');
+  }
+  if (!canImportModel(kind)) {
+    return refuse('textures are loaded as PNG, not as glTF — pick a model kind to import a model');
+  }
+  return inspectModelFile(bytes, kind, limit);
 }
 
 /** nameFromFile is the default asset name: the file's base name without its extension. */
@@ -50,7 +90,7 @@ export function inspectModelFile(bytes: ArrayBuffer, kind: Kind, limit = MAX_PAY
   }
   const parsed = parseGltf(bytes);
   if (!parsed) {
-    return refuse('not a glTF file: neither a GLB header nor glTF JSON');
+    return refuse('not a glTF or PNG file: neither a GLB header nor glTF JSON');
   }
   const required = Array.isArray(parsed.doc.extensionsRequired) ? parsed.doc.extensionsRequired : [];
   const compression = required.find((e): e is string => typeof e === 'string' && COMPRESSION_EXTENSIONS.includes(e));
@@ -69,7 +109,7 @@ function refuse(reason: string): ImportVerdict {
 }
 
 /** parseGltf recognises a GLB by its header and a .gltf by being JSON with asset.version; anything else is not glTF. */
-function parseGltf(bytes: ArrayBuffer): { doc: GltfDocument; format: ImportFormat } | null {
+function parseGltf(bytes: ArrayBuffer): { doc: GltfDocument; format: 'glb' | 'gltf' } | null {
   const glb = readGlbJson(bytes);
   if (glb !== null) {
     const doc = asGltf(glb);
@@ -117,7 +157,7 @@ function asGltf(text: string | null): GltfDocument | null {
  * BIN chunk); an image may live in a bufferView instead of a uri. Everything else must be a data: URI,
  * because the studio stores one file per asset and would have nowhere to put a second one.
  */
-function externalReferences(doc: GltfDocument, format: ImportFormat): string[] {
+function externalReferences(doc: GltfDocument, format: 'glb' | 'gltf'): string[] {
   const out: string[] = [];
   (doc.buffers ?? []).forEach((b, i) => {
     if (b.uri === undefined && format === 'glb' && i === 0) return;

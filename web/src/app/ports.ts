@@ -4,8 +4,8 @@
 // tested in Node in milliseconds (AGENTS.md, section 4).
 
 import type { Asset, Kind, SaveRequest } from '../domain/asset';
-import type { ImportFormat } from '../domain/import';
 import type { MaterialParams, ModelStats, Transform } from '../domain/model';
+import type { Rgba } from '../domain/texture';
 
 /**
  * SceneObject is whatever the rendering adapter puts in the viewport. The app layer only needs a name for
@@ -15,10 +15,15 @@ export interface SceneObject {
   readonly name: string;
 }
 
-/** TextureSource is the pixel source behind a texture asset — a canvas in the browser, anything in a test. */
+/** TextureSource is decoded pixels the adapter can draw or upload — a canvas or an image in the browser. */
 export interface TextureSource {
   readonly width: number;
   readonly height: number;
+}
+
+/** TextureHandle is a texture living in the scene, opaque to the app: it is only ever put back where it came from. */
+export interface TextureHandle {
+  readonly uuid: string;
 }
 
 /** AssetGateway is studiod as the app sees it. */
@@ -35,19 +40,23 @@ export interface ModelCodec {
   export(obj: SceneObject): Promise<ArrayBuffer>;
   load(url: string): Promise<SceneObject>;
   /** import parses bytes the designer picked; the domain has already checked they are glTF (domain/import). */
-  import(bytes: ArrayBuffer, format: ImportFormat): Promise<SceneObject>;
+  import(bytes: ArrayBuffer, format: 'glb' | 'gltf'): Promise<SceneObject>;
 }
 
-/** TextureCodec turns a texture source into png bytes, and a stored png into something to look at. */
+/** TextureCodec moves pixels between the forms a texture takes: a recipe's RGBA, a PNG's bytes, a stored asset, a preview. */
 export interface TextureCodec {
+  /** encode writes a PNG of exactly the source's pixels. */
   encode(source: TextureSource): Promise<ArrayBuffer>;
-  load(url: string): Promise<SceneObject>;
+  fromPixels(rgba: Rgba): TextureSource;
+  fromBytes(bytes: ArrayBuffer): Promise<TextureSource>;
+  fromUrl(url: string): Promise<TextureSource>;
+  /** plane is the preview: the texture on a flat quad, two metres wide, standing on the ground. */
+  plane(source: TextureSource): SceneObject;
 }
 
-/** Placeholders make the starting geometry for a kind. */
+/** Placeholders make the starting geometry for a model kind; a texture placeholder is a recipe (domain/texture). */
 export interface Placeholders {
   make(kind: Kind): SceneObject;
-  textureCanvas(): TextureSource;
 }
 
 /** ViewportPort holds one object at a time. */
@@ -79,6 +88,11 @@ export interface EditorPort {
   /** Materials are addressed by id so that two meshes sharing one are edited together, as in the file. */
   getMaterial(materialId: string): MaterialParams | null;
   setMaterial(materialId: string, params: MaterialParams): void;
+  /** The base colour texture of a material, as an opaque handle the session can put back on undo. */
+  getTexture(materialId: string): TextureHandle | null;
+  setTexture(materialId: string, texture: TextureHandle | null): void;
+  /** textureFrom makes a scene texture out of pixels, in the orientation glTF expects, so export keeps them as they are. */
+  textureFrom(source: TextureSource): TextureHandle;
   stats(): ModelStats | null;
   select(meshId: string | null): void;
   setGizmoMode(mode: GizmoMode): void;

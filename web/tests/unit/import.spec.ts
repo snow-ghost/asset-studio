@@ -1,7 +1,7 @@
-// @req-001-1 @req-001-2 @req-001-8
+// @req-001-1 @req-001-2 @req-001-8 @req-002-1 @req-002-2
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { canImportModel, inspectModelFile, nameFromFile } from '../../src/domain/import';
+import { canImportModel, inspectImport, inspectModelFile, isPng, nameFromFile, pngSize } from '../../src/domain/import';
 import { MAX_PAYLOAD_BYTES, formatMiB } from '../../src/domain/limits';
 
 const FIXTURES = new URL('../../../testdata/', import.meta.url);
@@ -22,7 +22,7 @@ describe('inspectModelFile on the shared fixtures', () => {
   });
 
   it.each([
-    ['not-a-model.bin', 'not a glTF file'],
+    ['not-a-model.bin', 'not a glTF or PNG'],
     ['external.gltf', 'external files (moss_boar.bin, moss_boar.png)'],
     ['draco.gltf', 'KHR_draco_mesh_compression'],
   ])('refuses %s mentioning %s', (file, reason) => {
@@ -33,9 +33,9 @@ describe('inspectModelFile on the shared fixtures', () => {
 });
 
 describe('inspectModelFile rules', () => {
-  it('refuses any glTF under the texture kind, before looking at the bytes', () => {
+  it('refuses any glTF under the texture kind', () => {
     expect(canImportModel('texture')).toBe(false);
-    const verdict = inspectModelFile(fixture('moss_boar.glb'), 'texture');
+    const verdict = inspectImport(fixture('moss_boar.glb'), 'texture');
     expect(verdict).toMatchObject({ ok: false });
     if (!verdict.ok) expect(verdict.reason).toContain('PNG');
   });
@@ -112,5 +112,40 @@ describe('the payload limit is one number for both sides', () => {
     [1.5 * 1024 * 1024, '1.5 MiB'],
   ])('formats %d bytes as %s like the server does', (bytes, label) => {
     expect(formatMiB(bytes)).toBe(label);
+  });
+});
+
+describe('inspectImport, the one door for a file', () => {
+  it('tells a PNG from a glTF by the bytes and asks the kind to fit', () => {
+    expect(inspectImport(fixture('bark_diffuse.png'), 'texture')).toEqual({ ok: true, format: 'png' });
+    expect(inspectImport(fixture('moss_boar.glb'), 'creature')).toEqual({ ok: true, format: 'glb' });
+    expect(inspectImport(fixture('moss_boar.gltf'), 'item')).toEqual({ ok: true, format: 'gltf' });
+  });
+
+  it.each([
+    ['bark_diffuse.png', 'creature', 'imported as glTF'],
+    ['moss_boar.glb', 'texture', 'PNG'],
+    ['not-a-model.bin', 'texture', 'not a glTF or PNG'],
+    ['not-a-model.bin', 'creature', 'not a glTF or PNG'],
+    ['external.gltf', 'creature', 'external files'],
+  ])('refuses %s under %s mentioning %s', (file, kind, reason) => {
+    const verdict = inspectImport(fixture(file), kind as 'creature' | 'texture');
+    expect(verdict.ok).toBe(false);
+    if (!verdict.ok) expect(verdict.reason).toContain(reason);
+  });
+
+  it('checks the limit before anything else', () => {
+    const verdict = inspectImport(fixture('bark_diffuse.png'), 'texture', 16);
+    if (!verdict.ok) expect(verdict.reason).toContain('limit');
+    expect(verdict.ok).toBe(false);
+  });
+
+  it('reads a PNG size from the header and refuses a truncated one', () => {
+    expect(isPng(fixture('bark_diffuse.png'))).toBe(true);
+    expect(pngSize(fixture('bark_diffuse.png'))).toEqual({ width: 64, height: 64 });
+    const truncated = fixture('bark_diffuse.png').slice(0, 12);
+    expect(isPng(truncated)).toBe(true);
+    expect(pngSize(truncated)).toBeNull();
+    expect(inspectImport(truncated, 'texture').ok).toBe(false);
   });
 });
