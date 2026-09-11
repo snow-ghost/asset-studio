@@ -177,17 +177,31 @@ export class ThreeEditor implements EditorPort {
     const mesh = this.meshes().find((m) => m.name === meshName);
     if (!mesh) return null;
     this.viewport.freshen();
+    // A usable point is on the canvas, has the mesh as its first hit, and is not covered by the gizmo's
+    // pickers — TransformControls takes a press on those before the studio sees it. Layout decides where
+    // the canvas is (a wrapped status line makes it shorter), so nothing here assumes a size.
+    const rect = this.viewport.canvas.getBoundingClientRect();
+    const pickers = this.pickers(this.controls.mode);
+    const usable = (q: { x: number; y: number }): boolean => {
+      if (q.x < rect.left + 2 || q.x > rect.right - 2 || q.y < rect.top + 2 || q.y > rect.bottom - 2) return false;
+      if (this.pick(q.x, q.y) !== mesh) return false;
+      this.raycaster.setFromCamera(this.viewport.toNdc(q.x, q.y), this.viewport.camera);
+      return this.raycaster.intersectObjects(pickers, false).length === 0;
+    };
     const centre = new THREE.Box3().setFromObject(mesh).getCenter(new THREE.Vector3());
     const p = this.viewport.project(centre);
-    if (!p) return null;
-    // A point where the mesh is the first hit is not enough: the gizmo sits on the object's origin and
-    // takes the press before the studio sees it, so a candidate its pickers cover would click nothing.
-    const pickers = this.pickers(this.controls.mode);
-    for (const [dx, dy] of spiral(60, 6)) {
-      const q = { x: p.x + dx, y: p.y + dy };
-      if (this.pick(q.x, q.y) !== mesh) continue;
-      this.raycaster.setFromCamera(this.viewport.toNdc(q.x, q.y), this.viewport.camera);
-      if (this.raycaster.intersectObjects(pickers, false).length === 0) return q;
+    if (p) {
+      for (const [dx, dy] of spiral(60, 6)) {
+        const q = { x: p.x + dx, y: p.y + dy };
+        if (usable(q)) return q;
+      }
+    }
+    // The centre may be off screen or hidden — a moved or scaled model is not reframed — while a part of
+    // the mesh is still visible. Scan the canvas coarsely for any such part before giving up.
+    for (let y = rect.top + 4; y < rect.bottom; y += 12) {
+      for (let x = rect.left + 4; x < rect.right; x += 12) {
+        if (usable({ x, y })) return { x, y };
+      }
     }
     return null;
   }
