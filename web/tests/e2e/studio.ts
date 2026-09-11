@@ -119,6 +119,7 @@ export async function press(page: Page, keys: string, times = 1): Promise<void> 
 export async function clickMesh(page: Page, mesh: string): Promise<void> {
   const at = await page.evaluate((name) => window.__studio?.screenPositionOf(name) ?? null, mesh);
   expect(at, `${mesh} must be clickable on screen`).not.toBeNull();
+  expect(at, `a clickable point for mesh ${mesh}`).not.toBeNull();
   if (!at) return;
   await page.mouse.click(at.x, at.y);
   await expect.poll(() => read.selectedMesh(page)).toBe(mesh);

@@ -79,6 +79,16 @@ export class Viewport implements ViewportPort {
   }
 
   /** project maps a world point to client (page) pixel coordinates; null when it is behind the camera. */
+  /**
+   * freshen brings every world matrix up to date without waiting for the render loop. Picking and
+   * projection read matrixWorld; between an edit and the next frame — a long gap under software rendering —
+   * they would otherwise describe where things were, not where they are.
+   */
+  freshen(): void {
+    this.scene.updateMatrixWorld(true);
+    this.camera.updateMatrixWorld(true);
+  }
+
   project(world: THREE.Vector3): { x: number; y: number } | null {
     this.camera.updateMatrixWorld();
     const ndc = world.clone().project(this.camera);

@@ -176,6 +176,7 @@ export class ThreeEditor implements EditorPort {
   screenPositionOf(meshName: string): { x: number; y: number } | null {
     const mesh = this.meshes().find((m) => m.name === meshName);
     if (!mesh) return null;
+    this.viewport.freshen();
     const centre = new THREE.Box3().setFromObject(mesh).getCenter(new THREE.Vector3());
     const p = this.viewport.project(centre);
     if (!p) return null;
@@ -194,6 +195,7 @@ export class ThreeEditor implements EditorPort {
   gizmoHandleScreenPosition(axis: 'x' | 'y' | 'z'): { x: number; y: number } | null {
     const picker = this.pickers('translate').find((o) => o.name === axis.toUpperCase());
     if (!picker) return null;
+    this.viewport.freshen();
     this.controls.getHelper().updateMatrixWorld(true);
     const centre = new THREE.Box3().setFromObject(picker).getCenter(new THREE.Vector3());
     return this.viewport.project(centre);
@@ -236,6 +238,9 @@ export class ThreeEditor implements EditorPort {
   }
 
   private pick(clientX: number, clientY: number): THREE.Mesh | null {
+    // World matrices are refreshed by the render loop; a click that arrives before the next frame after
+    // a transform edit would otherwise be cast against where the model used to be. Cheap, so always.
+    this.viewport.freshen();
     this.raycaster.setFromCamera(this.viewport.toNdc(clientX, clientY), this.viewport.camera);
     const hit = this.raycaster.intersectObjects(this.meshes(), false)[0];
     return hit && hit.object instanceof THREE.Mesh ? hit.object : null;
